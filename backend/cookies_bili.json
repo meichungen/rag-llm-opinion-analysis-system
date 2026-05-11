@@ -1,0 +1,122 @@
+[
+  {
+    "name": "_uuid",
+    "value": "EAB3E632-F897-3563-4EC8-67DAA8CDC15D79287infoc",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "buvid_fp",
+    "value": "ede1d8d20d0f26173d0cd70534daf2b3",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "buvid3",
+    "value": "44C2C1C6-8F34-A2C7-B9A6-E6BE29EC493C77854infoc",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "b_nut",
+    "value": "1775404877",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "buvid4",
+    "value": "37BCDB7B-1186-DC04-A719-61D4F3E0D2AF23850-025072022-/dJjJTXmxfPKvE2yglj5bA%3D%3D",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "CURRENT_QUALITY",
+    "value": "0",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "theme-tip-show",
+    "value": "SHOWED",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "theme-avatar-tip-show",
+    "value": "SHOWED",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "rpdid",
+    "value": "|(u)Ylmkl)R|0J'u~~|R)|mY~",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "bili_ticket",
+    "value": "eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3Nzg1MDUxMzIsImlhdCI6MTc3ODI0NTg3MiwicGx0IjotMX0.8PZMl3xgZUZ-g-zWV4Pk5SdXulAyEr3VR6QAGql-Rt0",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "bili_ticket_expires",
+    "value": "1778505072",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "CURRENT_FNVAL",
+    "value": "2000",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "SESSDATA",
+    "value": "7e037c87%2C1793797963%2Cca638%2A52CjBIHr9Bjag9vP0-gI8zUMYCkvm9b3mIMsaJJDiDMX2WfYE-1w5DVyDqQbqS-gqS6MMSVjBiWXZOUVRyQ1ZSQ2o1X1E2UTNONDh0ZVA0X0tZeWkxN3c2Mk1VZHZQd3ZNUmZ5Umw0bjFGMll5angwTzl2bDk4d3V1ZFl2VUZ4NlRfLXRsNEFGb1lnIIEC",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "bili_jct",
+    "value": "77aa430644e72f5764176acec7858fc1",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "DedeUserID",
+    "value": "512108221",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "DedeUserID__ckMd5",
+    "value": "68af16ac4746c0b7",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "sid",
+    "value": "phonfcow",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "home_feed_column",
+    "value": "4",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "browser_resolution",
+    "value": "1144-794",
+    "domain": ".bilibili.com",
+    "path": "/"
+  },
+  {
+    "name": "b_lsid",
+    "value": "A13A1845_19E07B82E61",
+    "domain": ".bilibili.com",
+    "path": "/"
+  }
+]

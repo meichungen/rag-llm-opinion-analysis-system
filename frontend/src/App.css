@@ -1,0 +1,125 @@
+/* Global styles that don't fit in index.css */
+
+.logo {
+  height: 32px;
+  margin: 16px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+/* Custom Scrollbar for Webkit browsers */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
+
+/* Responsive Layout Helpers */
+@media (max-width: 768px) {
+  .desktop-sider {
+    display: none !important;
+  }
+  
+  .site-layout {
+    margin-left: 0 !important;
+  }
+  
+  .desktop-trigger {
+    display: none !important;
+  }
+  
+  .mobile-trigger {
+    display: block !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-trigger {
+    display: none !important;
+  }
+}
+
+.hot-topic-card-header {
+  display: flex;
+  align-items: center;
+}
+
+.hot-topic-card-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ff7875 0%, #f5222d 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  box-shadow: 0 10px 24px rgba(245, 34, 45, 0.2);
+}
+
+.hot-topic-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff7e6 0%, #fff1f0 100%);
+}
+
+.hot-topic-list-item {
+  padding: 16px 0 !important;
+}
+
+.hot-topic-list-item .ant-list-item-meta {
+  align-items: center;
+}
+
+.hot-topic-list-item .ant-list-item-action {
+  margin-inline-start: 16px;
+}
+
+.hot-topic-rank-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: #f5f5f5;
+  color: #8c8c8c;
+  text-align: center;
+  line-height: 32px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.hot-topic-rank-badge.is-top {
+  background: linear-gradient(135deg, #ff9c6e 0%, #f5222d 100%);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(245, 34, 45, 0.16);
+}
+
+@media (max-width: 768px) {
+  .hot-topic-card-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
