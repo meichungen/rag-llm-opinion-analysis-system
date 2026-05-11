@@ -23,7 +23,7 @@ class LLMQuestionAnswering:
     def __init__(self, api_key: str, api_base: str = None, model: str = "qwen-plus", embedding_model: str = "moka-ai/m3e-base"):
         # Use user provided key if not provided or mock
         if not api_key or api_key == "mock-key":
-             api_key = "sk-776ed1bb1ed249baa385fa98a16836cb"
+             api_key = ""#需要自己的密钥
 
         self.api_key = api_key
         self.api_base = api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1"
