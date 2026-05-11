@@ -1,0 +1,38 @@
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*.so
+
+# 敏感信息与配置
+.env
+config.py
+secrets.py
+*.key
+*.pem
+
+# 日志文件
+*.log
+
+# 数据库文件（如果你本地有测试用的 db）
+*.db
+*.sqlite3
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
+
+# IDE 配置（根据你的编辑器选择）
+.vscode/
+.idea/
+*.swp
+
+# 项目生成的文件（如果有）
+output/
+reports/
+*.pdf   # 如果不想上传 PDF 报告，可以取消注释
