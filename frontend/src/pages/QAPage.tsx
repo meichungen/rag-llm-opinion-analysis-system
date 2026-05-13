@@ -11,6 +11,7 @@ import {
   Empty,
   Modal,
   Select,
+  Segmented,
   message,
   Layout,
   theme,
@@ -38,9 +39,22 @@ interface Message {
   type: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  used_tool?: string;
+  decision_summary?: string;
+  observation_summary?: string;
+  short_memory_turns?: number;
+  long_memory_hits?: number;
   context?: any;
   related_data?: any;
 }
+
+const TOOL_LABELS: Record<string, string> = {
+  direct_answer: '直接回答',
+  fetch_data: '数据查询',
+  sentiment_analysis: '情感分析',
+  topic_modeling: '主题建模',
+  vector_search: '长期检索',
+};
 
 const QAPage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -48,9 +62,13 @@ const QAPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [tasks, setTasks] = useState<any[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
+  const [chatMode, setChatMode] = useState<'qa' | 'agent'>('agent');
   
   const [showContextModal, setShowContextModal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const agentSessionRef = useRef(`agent-session-${Date.now()}`);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const activeAssistantRef = useRef<string | null>(null);
   const { token } = theme.useToken();
 
   // 预定义问题模板
@@ -88,13 +106,40 @@ const QAPage: React.FC = () => {
     fetchTasks();
   }, []);
 
-  // 发送消息 (Stream)
-  const sendMessage = async (content: string) => {
+  useEffect(() => {
+    return () => {
+      activeRequestRef.current?.abort();
+    };
+  }, []);
+
+  const cancelActiveRequest = (notice?: string) => {
+    activeRequestRef.current?.abort();
+    activeRequestRef.current = null;
+    setLoading(false);
+    if (notice && activeAssistantRef.current) {
+      setMessages(prev => prev.map(msg =>
+        msg.id === activeAssistantRef.current
+          ? { ...msg, content: notice, context: { cancelled: true } }
+          : msg
+      ));
+    }
+    activeAssistantRef.current = null;
+  };
+
+  const handleModeChange = (value: string | number) => {
+    const nextMode = value as 'qa' | 'agent';
+    if (loading) {
+      cancelActiveRequest('已取消上一轮回答，你可以在新模式下重新提问。');
+    }
+    setChatMode(nextMode);
+  };
+
+  const buildBaseMessages = (content: string) => {
     if (!content.trim() || loading) return;
     
     if (!selectedTaskId) {
       message.warning('请先选择一个分析任务作为上下文');
-      return;
+      return null;
     }
 
     const selectedTask = tasks.find(t => t.id === selectedTaskId);
@@ -122,14 +167,20 @@ const QAPage: React.FC = () => {
     setMessages(prev => [...prev, userMessage, placeholderMessage]);
     setInputValue('');
     setLoading(true);
-    
+    activeAssistantRef.current = assistantMsgId;
+    return { assistantMsgId };
+  };
+
+  const sendQaMessage = async (content: string, assistantMsgId: string) => {
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
     try {
-      // 问答接口采用流式输出，前端按块接收并逐步渲染回答内容。
       const response = await fetch(`${api.defaults.baseURL}${endpoints.qa.stream}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
         body: JSON.stringify({
             question: content,
             context_task_id: selectedTaskId
@@ -144,37 +195,40 @@ const QAPage: React.FC = () => {
       const decoder = new TextDecoder();
       let accumulatedContent = '';
       let relatedData: any = null;
+      let buffer = '';
 
       if (reader) {
           while (true) {
               const { done, value } = await reader.read();
               if (done) break;
               
-              const chunk = decoder.decode(value, { stream: true });
-              const lines = chunk.split('\n\n');
+              buffer += decoder.decode(value, { stream: true });
+              const events = buffer.split('\n\n');
+              buffer = events.pop() || '';
               
-              for (const line of lines) {
-                  if (line.startsWith('data: ')) {
+              for (const eventText of events) {
+                  const payload = eventText
+                    .split('\n')
+                    .filter(line => line.startsWith('data: '))
+                    .map(line => line.slice(6))
+                    .join('');
+                  if (payload) {
                       try {
-                          const data = JSON.parse(line.slice(6));
+                          const data = JSON.parse(payload);
                           
                           if (data.error) {
                               throw new Error(data.error);
                           }
                           
                           if (data.type === 'context') {
-                              // 该类数据表示本次回答使用的上下文来源。
                               relatedData = data.sources;
                           } else if (data.type === 'content') {
                               accumulatedContent += data.content;
-                              // 将流式片段持续写回同一条助手消息，实现逐字展示效果。
                               setMessages(prev => prev.map(msg => 
                                   msg.id === assistantMsgId 
                                   ? { ...msg, content: accumulatedContent, related_data: relatedData }
                                   : msg
                               ));
-                          } else if (data.type === 'done') {
-                              // Finished
                           }
                       } catch (e) {
                           console.error("Error parsing stream chunk", e);
@@ -182,22 +236,109 @@ const QAPage: React.FC = () => {
                   }
               }
           }
+          if (buffer.trim().startsWith('data: ')) {
+              try {
+                  const data = JSON.parse(buffer.trim().slice(6));
+                  if (data.type === 'content') {
+                      accumulatedContent += data.content;
+                      setMessages(prev => prev.map(msg =>
+                          msg.id === assistantMsgId
+                          ? { ...msg, content: accumulatedContent, related_data: relatedData }
+                          : msg
+                      ));
+                  }
+              } catch (e) {
+                  console.error("Error parsing trailing stream chunk", e);
+              }
+          }
       }
-
+      if (!accumulatedContent) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMsgId
+            ? { ...msg, content: '当前没有收到 QA 返回内容，请稍后重试。', context: { empty: true } }
+            : msg
+        ));
+      }
     } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        return;
+      }
       console.error('获取回答失败:', error);
-      
       setMessages(prev => prev.map(msg => 
           msg.id === assistantMsgId 
           ? { ...msg, content: '抱歉，处理您的问题时出现了错误。请稍后重试。', context: { error: true } }
           : msg
       ));
     } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
+      if (activeAssistantRef.current === assistantMsgId) {
+        activeAssistantRef.current = null;
+      }
       setLoading(false);
     }
   };
 
+  const sendAgentMessage = async (content: string, assistantMsgId: string) => {
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    try {
+      const response = await api.post(endpoints.agent.chat, {
+        query: content,
+        session_id: `${agentSessionRef.current}-task-${selectedTaskId}`
+      }, {
+        signal: controller.signal,
+      });
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMsgId
+          ? {
+              ...msg,
+              content: response.data.answer || 'Agent 暂未返回内容。',
+              used_tool: response.data.used_tool || 'direct_answer',
+              decision_summary: response.data.decision_summary,
+              observation_summary: response.data.observation_summary,
+              short_memory_turns: response.data.short_memory_turns,
+              long_memory_hits: response.data.long_memory_hits,
+            }
+          : msg
+      ));
+    } catch (error: any) {
+      if (error?.name === 'CanceledError' || error?.name === 'AbortError') {
+        return;
+      }
+      console.error('Agent 回答失败:', error);
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMsgId
+          ? { ...msg, content: '抱歉，Agent 模式处理失败，请稍后重试。', context: { error: true } }
+          : msg
+      ));
+    } finally {
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
+      if (activeAssistantRef.current === assistantMsgId) {
+        activeAssistantRef.current = null;
+      }
+      setLoading(false);
+    }
+  };
+
+  const sendMessage = async (content: string) => {
+    const prepared = buildBaseMessages(content);
+    if (!prepared) return;
+    
+    if (chatMode === 'agent') {
+      await sendAgentMessage(content, prepared.assistantMsgId);
+      return;
+    }
+    await sendQaMessage(content, prepared.assistantMsgId);
+  };
+
   const clearConversation = () => {
+    if (loading) {
+      cancelActiveRequest('当前回答已取消。');
+    }
     setMessages([]);
   };
 
@@ -241,6 +382,14 @@ const QAPage: React.FC = () => {
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '12px 0' }}>
+            <Segmented
+                value={chatMode}
+                onChange={handleModeChange}
+                options={[
+                  { label: 'Agent 模式', value: 'agent' },
+                  { label: 'QA 模式', value: 'qa' },
+                ]}
+            />
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <InfoCircleOutlined style={{ color: token.colorTextSecondary }} />
                 <Text type="secondary">当前上下文:</Text>
@@ -287,6 +436,9 @@ const QAPage: React.FC = () => {
           bodyStyle={{ flex: 1, overflowY: 'auto', padding: '16px' }}
           title="快捷指令"
         >
+            <Tag color={chatMode === 'agent' ? 'processing' : 'default'} style={{ marginBottom: 16 }}>
+                {chatMode === 'agent' ? '当前为 Agent 模式，可显示 used_tool' : '当前为 QA 模式，走原始流式问答'}
+            </Tag>
             <div style={{ marginBottom: 16 }}>
                 <Text strong style={{ marginBottom: 8, display: 'block' }}>常用问题</Text>
                 <List
@@ -371,6 +523,30 @@ const QAPage: React.FC = () => {
                                         boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
                                     }}>
                                         <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{msg.content}</div>
+                                        {msg.type === 'assistant' && msg.used_tool && (
+                                          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            <div>
+                                              <Tag color="blue">工具: {TOOL_LABELS[msg.used_tool] || msg.used_tool}</Tag>
+                                            </div>
+                                            <div style={{
+                                              background: '#fafafa',
+                                              border: '1px solid #f0f0f0',
+                                              borderRadius: 8,
+                                              padding: '10px 12px',
+                                              color: 'rgba(0,0,0,0.75)'
+                                            }}>
+                                              <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6 }}>
+                                                Agent 决策面板
+                                              </div>
+                                              <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                                                <div>决策摘要: {msg.decision_summary || '本轮未返回决策摘要。'}</div>
+                                                <div>工具观察: {msg.observation_summary || '本轮未返回工具观察。'}</div>
+                                                <div>短期记忆: {msg.short_memory_turns ?? 0} 条</div>
+                                                <div>长期命中: {msg.long_memory_hits ?? 0} 条</div>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
                                     </div>
                                     <div style={{ 
                                         textAlign: msg.type === 'user' ? 'right' : 'left', 
@@ -427,7 +603,7 @@ const QAPage: React.FC = () => {
                 </div>
                 <div style={{ textAlign: 'center', marginTop: 8 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                        内容由 AI 生成，仅供参考。请核对重要信息。
+                        {chatMode === 'agent' ? 'Agent 模式会显示工具、决策摘要和记忆命中情况。' : 'QA 模式保持原有流式问答体验。'}
                     </Text>
                 </div>
             </div>

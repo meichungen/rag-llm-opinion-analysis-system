@@ -13,6 +13,8 @@ from sentence_transformers import SentenceTransformer, util
 from openai import AsyncOpenAI
 import httpx
 
+from app.core.llm import resolve_llm_runtime_config
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,16 +23,21 @@ class LLMQuestionAnswering:
     """大模型问答系统 (基于向量检索 RAG)"""
     
     def __init__(self, api_key: str, api_base: str = None, model: str = "qwen-plus", embedding_model: str = "moka-ai/m3e-base"):
-        # Use user provided key if not provided or mock
-        if not api_key or api_key == "mock-key":
-             api_key = ""#需要自己的密钥
-
-        self.api_key = api_key
-        self.api_base = api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        self.model = model
+        llm_config = resolve_llm_runtime_config(
+            {
+                "api_key": api_key,
+                "api_base": api_base,
+                "model": model,
+            }
+        )
+        self.api_key = llm_config["api_key"]
+        self.api_base = llm_config["api_base"]
+        self.model = llm_config["model"]
         
         # 初始化OpenAI客户端 (Async)
         try:
+            if not self.api_key:
+                raise ValueError("LLM API Key 未配置")
             # Explicitly use httpx.AsyncClient to avoid proxies issue with newer httpx versions
             self.client = AsyncOpenAI(
                 api_key=self.api_key,
@@ -565,12 +572,12 @@ class QAService:
 # 测试函数
 async def test_qa_system():
     """测试问答系统"""
-    # 从环境变量获取密钥
-    api_key = os.getenv("OPENAI_API_KEY")
-    api_base = os.getenv("OPENAI_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    llm_config = resolve_llm_runtime_config()
+    api_key = llm_config["api_key"]
+    api_base = llm_config["api_base"]
     
     if not api_key:
-        print("请设置 OPENAI_API_KEY 环境变量进行测试")
+        print("请设置 DASHSCOPE_API_KEY / QWEN_API_KEY / OPENAI_API_KEY 环境变量进行测试")
         return
     
     # 初始化服务

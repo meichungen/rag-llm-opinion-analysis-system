@@ -28,19 +28,22 @@ import time
 from app.core.database import get_db, engine, Base, AsyncSessionLocal
 from app.core.settings import (
     DEFAULT_SETTINGS,
-    get_cookie_file_path,
     get_default_setting,
+    get_cookie_file_path,
     normalize_cookie_content,
     read_platform_cookie_status,
 )
+from app.core.llm import resolve_llm_runtime_config
 from app.models.sql_models import User, Task, Post, Comment, Sentiment, AnalysisResult, SystemConfig
 from app.schemas.schemas import (
     TaskCreate, Task as TaskSchema, TaskListResponse, TaskDetail,
     DataPreviewResponse, LDAResponse, SentimentAnalysisResponse,
     WordCloudResponse, TaskAction, SettingsUpdate, PlatformCookieUpdate, QARequest, QAResponse,
-    HotTopicListResponse, HotTopicSettings, HotTopicAnalysisRequest, HotTopicAnalysisResponse, ExportRequest,
+    AgentChatRequest, AgentChatResponse, HotTopicListResponse, HotTopicSettings,
+    HotTopicAnalysisRequest, HotTopicAnalysisResponse, ExportRequest,
     DashboardMetricsResponse
 )
+from app.agent import OpinionAgent
 from app.services.services import run_task_logic, stop_task_process
 from app.services.dashboard_service import DashboardService
 from app.services.report_service import ReportService
@@ -116,11 +119,42 @@ async def save_setting_value(
     return record
 
 
+def mask_secret(secret: str) -> str:
+    if not secret:
+        return ""
+    if len(secret) <= 8:
+        return "*" * len(secret)
+    return f"{secret[:4]}{'*' * max(4, len(secret) - 8)}{secret[-4:]}"
+
+
+def sanitize_llm_settings(value: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = dict(value or {})
+    sanitized["api_key"] = mask_secret(str(sanitized.get("api_key", "") or ""))
+    sanitized["has_api_key"] = bool(value and value.get("api_key"))
+    return sanitized
+
+
+def preserve_secret_fields(current: Dict[str, Any], incoming: Dict[str, Any], fields: list[str]) -> Dict[str, Any]:
+    merged = dict(incoming or {})
+    for field in fields:
+        raw = merged.get(field)
+        if raw in (None, "", "******") and current.get(field):
+            merged[field] = current[field]
+    return merged
+
+
+async def get_llm_runtime_config(db: AsyncSession) -> Dict[str, Any]:
+    config = await get_setting_value(db, "llm")
+    return resolve_llm_runtime_config(config)
+
+
 async def build_settings_response(db: AsyncSession) -> Dict[str, Any]:
+    llm_settings = await get_llm_runtime_config(db)
     return {
         "system": await get_setting_value(db, "system"),
         "model": await get_setting_value(db, "model"),
-        "llm": await get_setting_value(db, "llm"),
+        "llm": sanitize_llm_settings(llm_settings),
+        "agent": await get_setting_value(db, "agent"),
         "platform": await get_setting_value(db, "platform"),
         "platform_cookie_status": read_platform_cookie_status(DEFAULT_SETTINGS["platform"].keys()),
     }
@@ -470,12 +504,17 @@ async def update_settings(settings: SettingsUpdate, db: AsyncSession = Depends(g
     if not isinstance(settings.value, dict):
         raise HTTPException(status_code=400, detail="Settings value must be a JSON object")
 
-    merged_value = merge_dict_values(get_default_setting(settings.key), settings.value)
+    current_value = await get_setting_value(db, settings.key)
+    next_value = settings.value
+    if settings.key == "llm":
+        next_value = preserve_secret_fields(current_value, next_value, ["api_key"])
+    merged_value = merge_dict_values(current_value, next_value)
     await save_setting_value(db, settings.key, merged_value, description=f"{settings.key} settings")
+    response_value = sanitize_llm_settings(merged_value) if settings.key == "llm" else merged_value
     return {
         "message": "Settings updated",
         "key": settings.key,
-        "value": merged_value,
+        "value": response_value,
     }
 
 
@@ -773,11 +812,24 @@ async def get_qa_context_docs(task_id: int, db: AsyncSession):
         
     return docs
 
+
+@app.post("/api/agent/chat", response_model=AgentChatResponse)
+async def agent_chat(request: AgentChatRequest, db: AsyncSession = Depends(get_db)):
+    # Agent 层只做调度，不改动现有采集、分析和问答主链路。
+    llm_config = await get_llm_runtime_config(db)
+    agent_config = await get_setting_value(db, "agent")
+    agent = OpinionAgent(db=db, llm_config=llm_config, agent_config=agent_config)
+    result = await agent.run_detail(request.query, request.session_id)
+    return result
+
 @app.post("/api/qa", response_model=QAResponse)
 async def qa_chat(request: QARequest, db: AsyncSession = Depends(get_db)):
-    api_key = os.environ.get("OPENAI_API_KEY", "mock-key")
-    api_base = os.environ.get("OPENAI_API_BASE", None)
-    qa_service = LLMQuestionAnswering(api_key=api_key, api_base=api_base)
+    llm_config = await get_llm_runtime_config(db)
+    qa_service = LLMQuestionAnswering(
+        api_key=llm_config.get("api_key", ""),
+        api_base=llm_config.get("api_base"),
+        model=llm_config.get("model", "qwen-plus"),
+    )
     
     if request.context_task_id:
         context_docs = await get_qa_context_docs(request.context_task_id, db)
@@ -788,9 +840,12 @@ async def qa_chat(request: QARequest, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/qa/stream")
 async def qa_stream(request: QARequest, db: AsyncSession = Depends(get_db)):
-    api_key = os.environ.get("OPENAI_API_KEY", "mock-key")
-    api_base = os.environ.get("OPENAI_API_BASE", None)
-    qa_service = LLMQuestionAnswering(api_key=api_key, api_base=api_base)
+    llm_config = await get_llm_runtime_config(db)
+    qa_service = LLMQuestionAnswering(
+        api_key=llm_config.get("api_key", ""),
+        api_base=llm_config.get("api_base"),
+        model=llm_config.get("model", "qwen-plus"),
+    )
     
     if request.context_task_id:
         context_docs = await get_qa_context_docs(request.context_task_id, db)
@@ -800,7 +855,15 @@ async def qa_stream(request: QARequest, db: AsyncSession = Depends(get_db)):
         async for chunk in qa_service.stream_answer_question(request.question, use_context=True):
             yield chunk
 
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # ... imports ...
 

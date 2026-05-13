@@ -119,6 +119,20 @@ class QAResponse(BaseModel):
     error: Optional[str] = None
     suggestion: Optional[str] = None
 
+
+class AgentChatRequest(BaseModel):
+    query: str
+    session_id: str
+
+
+class AgentChatResponse(BaseModel):
+    answer: str
+    used_tool: str
+    decision_summary: Optional[str] = None
+    observation_summary: Optional[str] = None
+    short_memory_turns: Optional[int] = None
+    long_memory_hits: Optional[int] = None
+
 class HotTopicBase(BaseModel):
     source: str
     title: str

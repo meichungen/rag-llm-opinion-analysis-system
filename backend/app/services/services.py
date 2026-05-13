@@ -4,10 +4,13 @@ import threading
 import subprocess
 import sys
 import os
+from copy import deepcopy
 from datetime import datetime
 from sqlalchemy.future import select
 from sqlalchemy import func
+from app.agent.indexer import KnowledgeIndexer
 from app.core.database import AsyncSessionLocal
+from app.core.settings import DEFAULT_SETTINGS
 from app.models.sql_models import Task, Post, Comment, Sentiment, AnalysisResult, SystemConfig
 from app.crawler.crawler import SocialMediaCrawler
 from app.sentiment.analyzer import SentimentAnalyzer
@@ -42,6 +45,21 @@ async def stop_task_process(task_id: int):
 
 def _is_user_interrupted(task: Task) -> bool:
     return task.status == "paused" or task.progress_message in USER_CONTROL_MESSAGES
+
+
+async def _load_agent_config(session) -> dict:
+    default_config = deepcopy(DEFAULT_SETTINGS["agent"])
+    result = await session.execute(select(SystemConfig).filter_by(key="agent"))
+    record = result.scalars().first()
+    if not record or not isinstance(record.value, dict):
+        return default_config
+    default_config.update(record.value)
+    return default_config
+
+
+async def _sync_task_knowledge(session, task_id: int) -> dict:
+    agent_config = await _load_agent_config(session)
+    return await KnowledgeIndexer(agent_config).sync_task(session, task_id)
 
 async def run_task_logic(task_id: int):
     """
@@ -325,6 +343,11 @@ async def run_task_logic(task_id: int):
                     await session.commit()
                     logger.info("Multi-source analysis result saved successfully")
                     await DashboardService.refresh_total_collected_cache(session)
+                    try:
+                        sync_result = await _sync_task_knowledge(session, task_id)
+                        logger.info("Knowledge sync finished for task %s: %s", task_id, sync_result)
+                    except Exception as sync_exc:
+                        logger.warning("Knowledge sync skipped for task %s: %s", task_id, sync_exc)
                     
             except Exception as e:
                 logger.error(f"Sentiment analysis or aggregation failed: {e}")

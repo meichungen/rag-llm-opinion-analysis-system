@@ -67,6 +67,9 @@ export const endpoints = {
     stream: '/qa/stream',
     history: '/qa/history',
   },
+  agent: {
+    chat: '/agent/chat',
+  },
   hotTopics: {
     list: '/hot-topics',
     sources: '/hot-topics/sources',

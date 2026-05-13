@@ -1,5 +1,4 @@
 import logging
-import os
 import io
 import asyncio
 import json
@@ -14,6 +13,7 @@ from sqlalchemy import func, desc
 
 # App modules
 from app.core.database import AsyncSessionLocal
+from app.core.llm import resolve_llm_runtime_config
 from app.models.sql_models import Task, AnalysisResult, Post, Comment, Sentiment
 from app.qa.llm_service import LLMQuestionAnswering, QAService
 
@@ -39,11 +39,13 @@ logger = logging.getLogger(__name__)
 class ReportService:
     def __init__(self):
         self.db_session = None
-        # 获取 LLM 客户端配置
-        api_key = os.environ.get('OPENAI_API_KEY')
-        api_base = os.environ.get('OPENAI_API_BASE')
+        llm_config = resolve_llm_runtime_config()
         # 复用 QAService 来管理 LLM
-        self.qa_service = QAService(api_key=api_key, api_base=api_base)
+        self.qa_service = QAService(
+            api_key=llm_config["api_key"],
+            api_base=llm_config["api_base"],
+            model=llm_config["model"],
+        )
 
     @staticmethod
     def _is_detailed_report(content: Optional[str]) -> bool:

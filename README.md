@@ -36,6 +36,32 @@
 | **数据库与存储** | MySQL（主业务库）, Redis（向量缓存与分布式锁） |
 | **部署与工具** | Docker, Git, python-dotenv |
 
+## Agent架构设计
+
+当前新增的智能调度层采用 **单Agent + ReAct + Tool Use** 架构，放在现有 RESTful API 之上，不改动原有采集、分析和问答业务逻辑。
+
+```mermaid
+flowchart TD
+    U[用户问题] --> A[OpinionAgent]
+    A --> M1[短期记忆 Redis List]
+    A --> M2[长期记忆 Vector Search]
+    A --> T1[fetch_data]
+    A --> T2[sentiment_analysis]
+    A --> T3[topic_modeling]
+    A --> T4[vector_search]
+    T1 --> S[现有 MySQL / AnalysisResult / Post / Comment]
+    T2 --> S2[现有情感分析模块]
+    T3 --> S3[现有 LDA 分析模块]
+    T4 --> S4[现有 RAG/检索能力]
+    A --> R[最终回答]
+```
+
+- **自主规划**：Agent 会先读取短期记忆和长期记忆，再判断是否需要调用工具。
+- **工具调用**：将现有能力封装为标准化 Tool，包括数据查询、情感分析、主题建模、长期检索。
+- **双层记忆**：短期记忆保存最近 5 轮会话，长期记忆支持 `local_embedding / redis_vector / milvus` 多后端检索补充背景知识。
+- **RAG闭环**：任务分析完成后，会自动把摘要、帖子片段、评论片段同步到向量索引，供后续 Agent 检索复用。
+- **实现策略**：未为 Agent 引入 LangChain、LangGraph、LlamaIndex 等重框架，核心循环由原生 Python 编写，方便逐行解释与面试展示。
+
 ## 📦 快速开始
 
 ### 环境准备
@@ -105,7 +131,7 @@ uvicorn main:app --reload --port 8000
 启动前端开发服务器（在 frontend 目录下的终端中）
 
 bash
-npm start
+npm run dev
 前端页面将运行在 http://localhost:3000
 
 现在你就可以开始使用系统了 🎉
