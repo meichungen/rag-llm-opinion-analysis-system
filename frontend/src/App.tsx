@@ -9,6 +9,7 @@ import HomePage from './pages/HomePage';
 import TaskManagementPage from './pages/TaskManagementPage';
 import AnalysisPage from './pages/AnalysisPage';
 import QAPage from './pages/QAPage';
+import AgentPage from './pages/AgentPage';
 import SettingsPage from './pages/SettingsPage';
 import HotTopicsPage from './pages/HotTopicsPage';
 import './App.css';
@@ -34,6 +35,7 @@ const App: React.FC = () => {
               <Route path="hot-topics" element={<HotTopicsPage />} />
               <Route path="analysis" element={<AnalysisPage />} />
               <Route path="qa" element={<QAPage />} />
+              <Route path="agent" element={<AgentPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

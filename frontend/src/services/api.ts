@@ -53,6 +53,8 @@ export const endpoints = {
   taskReport: (taskId: number) => `/tasks/${taskId}/report`,
   settings: '/settings',
   settingsPlatformCookie: '/settings/platform-cookie',
+  settingsPlatformCookieHealth: '/settings/platform-cookie/health',
+  settingsPlatformCrawler: '/settings/platform-crawler',
   dashboard: {
     metrics: '/v1/dashboard/metrics',
   },

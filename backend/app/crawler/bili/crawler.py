@@ -15,12 +15,13 @@ from .exception import DataFetchError
 logger = logging.getLogger(__name__)
 
 class BilibiliCrawler:
-    def __init__(self, browser: Browser):
+    def __init__(self, browser: Browser, config: Optional[Dict] = None):
         self.browser = browser
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.client: Optional[BilibiliClient] = None
         self.index_url = "https://www.bilibili.com"
+        self.config = config or {}
 
     async def init_client(self):
         """Initialize the BilibiliClient with cookies from the browser context"""
@@ -60,7 +61,9 @@ class BilibiliCrawler:
         self.client = BilibiliClient(
             headers=headers,
             playwright_page=self.page,
-            cookie_dict=cookie_dict
+            cookie_dict=cookie_dict,
+            request_retry_attempts=int(self.config.get("request_retry_attempts", 5)),
+            enable_unsigned_search_fallback=bool(self.config.get("enable_unsigned_search_fallback", True)),
         )
 
     async def search_posts(self, keyword: str, count: int = 100) -> List[Dict]:
@@ -72,10 +75,25 @@ class BilibiliCrawler:
         all_posts = []
         page = 1
         page_size = 20 # B站通常一页20条
+        max_pages = max(
+            1,
+            int(self.config.get("max_search_pages", max(3, (count + page_size - 1) // page_size + 2))),
+        )
         
-        while len(all_posts) < count:
+        while len(all_posts) < count and page <= max_pages:
             try:
-                result = await self.client.search_video_by_keyword(keyword, page=page, page_size=page_size)
+                search_retry_attempts = max(1, int(self.config.get("search_retry_attempts", 1)))
+                last_error = None
+                result = None
+                for _ in range(search_retry_attempts):
+                    try:
+                        result = await self.client.search_video_by_keyword(keyword, page=page, page_size=page_size)
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                if result is None and last_error is not None:
+                    raise last_error
                 
                 # Bilibili search API returns 'result' field in 'data'
                 items = []
@@ -123,7 +141,12 @@ class BilibiliCrawler:
                 page += 1
                 await asyncio.sleep(random.uniform(3, 5))
                 continue
-                
+
+        if page > max_pages and len(all_posts) < count:
+            logger.warning(
+                f"Stopped Bilibili search after reaching max_pages={max_pages}, collected {len(all_posts)} posts"
+            )
+
         return all_posts[:count]
 
     def _parse_video(self, item: Dict) -> Optional[Dict]:
@@ -158,16 +181,9 @@ class BilibiliCrawler:
     async def get_comments(self, post_id: str, count: int = 1000) -> List[Dict]:
         if not self.client:
             await self.init_client()
-            
-        logger.info(f"Getting comments for video {post_id}")
-        
-        # post_id is bvid. We need aid (oid) for comments API.
-        # Ideally we stored aid in 'extra' or we need to fetch detail to get aid.
-        # If post_id is passed directly from search_posts result, we might not have aid easily accessible 
-        # if we only pass the dict. 
-        # SocialMediaCrawler passes post['id'] which is bvid.
-        # So we need to get aid from bvid.
-        
+
+        logger.info(f"Getting comments for video {post_id}, target count: {count}")
+
         aid = await self._get_aid_by_bvid(post_id)
         if not aid:
             logger.warning(f"Could not find aid for bvid {post_id}")
@@ -175,47 +191,101 @@ class BilibiliCrawler:
 
         all_comments = []
         next_page = 0
-        
-        while len(all_comments) < count:
+        page_count = 0
+        max_pages = 100
+        max_pages = max(1, int(self.config.get("max_comment_pages", max_pages)))
+        modes_to_try = [3, 2, 1]
+        current_mode_index = 0
+        mode = modes_to_try[current_mode_index]
+
+        while len(all_comments) < count and page_count < max_pages:
             try:
-                res = await self.client.get_video_comments(str(aid), next_page=next_page)
+                page_count += 1
+                logger.info(f"Fetching comment page {page_count} for video {post_id}, current count: {len(all_comments)}, mode={mode}")
+
+                comment_retry_attempts = max(1, int(self.config.get("comment_retry_attempts", 1)))
+                last_error = None
+                res = None
+                for _ in range(comment_retry_attempts):
+                    try:
+                        res = await self.get_video_comments_by_mode(str(aid), next_page=next_page, mode=mode)
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                if res is None and last_error is not None:
+                    raise last_error
                 cursor = res.get("cursor", {})
                 replies = res.get("replies", [])
-                
+
                 if not replies:
+                    logger.info(f"No replies in mode {mode} for video {post_id}, trying different mode")
+                    current_mode_index += 1
+                    if current_mode_index < len(modes_to_try):
+                        mode = modes_to_try[current_mode_index]
+                        next_page = 0
+                        page_count = 0
+                        logger.info(f"Switching to mode {mode} for video {post_id}")
+                        continue
+                    logger.info(f"No more modes to try for video {post_id}, breaking (fetched {len(all_comments)} comments)")
                     break
-                    
+
                 for reply in replies:
                     parsed = self._parse_comment(reply, post_id)
                     if parsed:
                         all_comments.append(parsed)
                         if len(all_comments) >= count:
                             break
-                
+
                 if len(all_comments) >= count:
                     break
 
-                if cursor.get("is_end"):
-                    break
-                    
+                is_end = cursor.get("is_end", False)
                 next_page = cursor.get("next", 0)
+
+                logger.debug(f"Cursor info for {post_id}: next={next_page}, is_end={is_end}")
+
                 if next_page == 0:
-                     break
-                     
+                    if len(all_comments) < 5 and current_mode_index < len(modes_to_try) - 1:
+                        current_mode_index += 1
+                        mode = modes_to_try[current_mode_index]
+                        next_page = 0
+                        page_count = 0
+                        logger.info(f"Only got {len(all_comments)} comments, switching to mode {mode}")
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                        continue
+                    logger.info(f"End of comments for video {post_id}: next=0, no more pages")
+                    break
+
                 await asyncio.sleep(random.uniform(0.5, 1.5))
-                
+
             except Exception as e:
-                logger.error(f"Error getting comments for {post_id}: {e}")
+                logger.error(f"Error getting comments for {post_id} at page {page_count}: {e}")
                 break
-                
+
+        logger.info(f"Finished getting comments for video {post_id}: total {len(all_comments)} comments from {page_count} pages")
         return all_comments
 
+    async def get_video_comments_by_mode(
+        self,
+        video_id: str,
+        next_page: int = 0,
+        mode: int = 3,
+    ) -> Dict:
+        params = {"oid": video_id, "mode": mode, "type": 1, "ps": 20, "next": next_page}
+        try:
+            return await self.client.get("/x/v2/reply/wbi/main", params, enable_params_sign=True)
+        except DataFetchError as exc:
+            if not bool(self.config.get("enable_unsigned_comment_fallback", True)):
+                raise
+            logger.warning(
+                f"WBI comments request failed for oid={video_id}, mode={mode}, fallback to unsigned API: {exc}"
+            )
+            return await self.client.get("/x/v2/reply/main", params, enable_params_sign=False)
+
     async def _get_aid_by_bvid(self, bvid: str) -> Optional[int]:
-        # Try to fetch video info
         try:
             info = await self.client.get_video_info(bvid)
-            # The response structure for /x/web-interface/view/detail can be complex
-            # Usually it has 'View' or just the data directly
             if 'View' in info:
                 return info['View'].get("aid")
             return info.get("aid")

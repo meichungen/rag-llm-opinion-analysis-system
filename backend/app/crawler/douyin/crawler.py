@@ -11,12 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 class DouyinCrawler:
-    def __init__(self, browser: Browser):
+    def __init__(self, browser: Browser, config: Optional[Dict] = None):
         self.browser = browser
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.client: Optional[DouyinClient] = None
         self.index_url = "https://www.douyin.com"
+        self.config = config or {}
 
     async def init_client(self):
         if not self.context:
@@ -52,6 +53,7 @@ class DouyinCrawler:
             headers=headers,
             playwright_page=self.page,
             cookie_dict=cookie_dict,
+            request_retry_attempts=int(self.config.get("request_retry_attempts", 5)),
         )
 
     async def search_posts(self, keyword: str, count: int = 100) -> List[Dict]:
@@ -63,14 +65,26 @@ class DouyinCrawler:
         page = 0
         search_id = ""
         page_size = 15
+        max_pages = max(1, int(self.config.get("max_search_pages", 6)))
 
-        while len(all_posts) < count:
+        while len(all_posts) < count and page < max_pages:
             try:
-                result = await self.client.search_info_by_keyword(
-                    keyword=keyword,
-                    offset=page * page_size,
-                    search_id=search_id,
-                )
+                search_retry_attempts = max(1, int(self.config.get("search_retry_attempts", 1)))
+                last_error = None
+                result = None
+                for _ in range(search_retry_attempts):
+                    try:
+                        result = await self.client.search_info_by_keyword(
+                            keyword=keyword,
+                            offset=page * page_size,
+                            search_id=search_id,
+                        )
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                if result is None and last_error is not None:
+                    raise last_error
                 search_id = (result.get("extra") or {}).get("logid", "")
                 items = result.get("data") or []
                 if not items:
@@ -133,12 +147,24 @@ class DouyinCrawler:
             await self.init_client()
 
         logger.info(f"Getting Douyin comments for post {post_id}")
-        raw_comments = await self.client.get_aweme_all_comments(
-            aweme_id=post_id,
-            crawl_interval=0.8,
-            is_fetch_sub_comments=True,
-            max_count=count,
-        )
+        comment_retry_attempts = max(1, int(self.config.get("comment_retry_attempts", 1)))
+        last_error = None
+        raw_comments = None
+        for _ in range(comment_retry_attempts):
+            try:
+                raw_comments = await self.client.get_aweme_all_comments(
+                    aweme_id=post_id,
+                    crawl_interval=0.8,
+                    is_fetch_sub_comments=bool(self.config.get("fetch_sub_comments", True)),
+                    max_count=count,
+                    max_pages=int(self.config.get("max_comment_pages", 10)),
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+        if raw_comments is None and last_error is not None:
+            raise last_error
         parsed_comments: List[Dict] = []
         for comment in raw_comments:
             parsed = self._parse_comment(comment, post_id)

@@ -39,6 +39,7 @@ const items: MenuItem[] = [
   getItem('任务管理', '/tasks', <SearchOutlined />),
   getItem('数据分析', '/analysis', <BarChartOutlined />),
   getItem('智能问答', '/qa', <RobotOutlined />),
+  getItem('Agent 助手', '/agent', <RobotOutlined />),
   getItem('系统设置', '/settings', <SettingOutlined />),
 ];
 

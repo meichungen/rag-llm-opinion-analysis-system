@@ -5,12 +5,12 @@ import os
 import random
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Database imports
-from app.core.settings import get_cookie_file_candidates
+from app.core.settings import get_cookie_file_candidates, get_platform_crawler_config
 from sqlalchemy.future import select
 from app.core.database import AsyncSessionLocal
 from app.models.sql_models import Post, Comment, Task
@@ -33,9 +33,10 @@ logger = logging.getLogger(__name__)
 class SocialMediaCrawler:
     """社交媒体爬虫主类"""
     
-    def __init__(self):
+    def __init__(self, platform_settings: Optional[Dict[str, Any]] = None):
         self.browser: Optional[Browser] = None
         self.page: Optional[Page] = None
+        self.platform_settings = platform_settings or {}
         self.platforms = {
             'weibo': WeiboCrawler,
             'bilibili': BilibiliCrawler,
@@ -90,7 +91,7 @@ class SocialMediaCrawler:
             raise ValueError(f"Unsupported platform: {platform}")
         
         crawler_class = self.platforms[platform]
-        crawler = crawler_class(self.browser)
+        crawler = crawler_class(self.browser, get_platform_crawler_config(platform, self.platform_settings))
         
         # Load cookies
         cookies = await self.load_cookies(platform)

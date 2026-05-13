@@ -28,12 +28,12 @@ import time
 from app.core.database import get_db, engine, Base, AsyncSessionLocal
 from app.core.settings import (
     DEFAULT_SETTINGS,
-    get_default_setting,
     get_cookie_file_path,
+    get_default_setting,
+    get_platform_crawler_config,
     normalize_cookie_content,
     read_platform_cookie_status,
 )
-from app.core.llm import resolve_llm_runtime_config
 from app.models.sql_models import User, Task, Post, Comment, Sentiment, AnalysisResult, SystemConfig
 from app.schemas.schemas import (
     TaskCreate, Task as TaskSchema, TaskListResponse, TaskDetail,
@@ -73,6 +73,81 @@ def load_stop_words():
         logger.error(f"Failed to load stop words: {e}")
 
 load_stop_words()
+
+
+def detect_task_risk_fingerprints(text: str) -> List[Dict[str, str]]:
+    haystack = (text or "").lower()
+    fingerprints: List[Dict[str, str]] = []
+    rules = [
+        ("bilibili_412", ["错误号: 412", "security control policy", "请求被拒绝"], "触发平台 412 风控拦截"),
+        ("captcha", ["captcha", "验证", "验证码"], "命中验证码校验"),
+        ("login_required", ["未登录", "login", "-101", "cookie"], "登录态可能失效"),
+        ("empty_json", ["非 json", "decode json", "空内容"], "接口返回空内容或非 JSON"),
+        ("blocked", ["blocked", "风控", "拦截"], "请求可能被平台限制"),
+        ("wbi_failed", ["failed to get wbi keys", "wbi"], "Bilibili WBI 签名获取失败"),
+    ]
+    for code, keywords, message in rules:
+        if any(keyword.lower() in haystack for keyword in keywords):
+            fingerprints.append({"code": code, "message": message})
+    return fingerprints
+
+
+def build_task_runtime_diagnostics(
+    task: Task,
+    *,
+    post_count_actual: int,
+    comment_count_actual: int,
+) -> Dict[str, Any]:
+    warnings: List[Dict[str, Any]] = []
+    risk_fingerprints: List[Dict[str, Any]] = []
+
+    progress_message = task.progress_message or ""
+    if progress_message:
+        message_risks = detect_task_risk_fingerprints(progress_message)
+        risk_fingerprints.extend(message_risks)
+        if task.status in {"failed", "paused"} or message_risks:
+            warnings.append(
+                {
+                    "scope": "task_runtime",
+                    "message": progress_message,
+                    "risk_fingerprints": message_risks,
+                }
+            )
+
+    if task.status == "completed":
+        if post_count_actual < task.post_count:
+            warnings.append(
+                {
+                    "scope": "collection",
+                    "message": f"帖子抓取数量不足，目标 {task.post_count}，实际 {post_count_actual}。",
+                    "risk_fingerprints": [],
+                }
+            )
+        if comment_count_actual < task.comment_count:
+            warnings.append(
+                {
+                    "scope": "collection",
+                    "message": f"评论抓取数量不足，目标 {task.comment_count}，实际 {comment_count_actual}。",
+                    "risk_fingerprints": [],
+                }
+            )
+
+    diagnostics = {
+        "requested_posts": task.post_count,
+        "requested_comments": task.comment_count,
+        "actual_posts": post_count_actual,
+        "actual_comments": comment_count_actual,
+        "status": task.status,
+        "progress": task.progress,
+        "progress_message": progress_message or None,
+        "warning_count": len(warnings),
+    }
+
+    return {
+        "warnings": warnings,
+        "risk_fingerprints": risk_fingerprints,
+        "diagnostics": diagnostics,
+    }
 
 
 def merge_dict_values(base: Any, override: Any) -> Any:
@@ -145,7 +220,37 @@ def preserve_secret_fields(current: Dict[str, Any], incoming: Dict[str, Any], fi
 
 async def get_llm_runtime_config(db: AsyncSession) -> Dict[str, Any]:
     config = await get_setting_value(db, "llm")
-    return resolve_llm_runtime_config(config)
+    env_api_key = (
+        os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("QWEN_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    env_api_base = (
+        os.getenv("DASHSCOPE_API_BASE")
+        or os.getenv("QWEN_API_BASE")
+        or os.getenv("OPENAI_API_BASE")
+    )
+    db_api_key = config.get("api_key") or ""
+    masked_values = {"", "******", "None", None}
+    env_key_valid = env_api_key and env_api_key not in masked_values
+    db_key_valid = db_api_key and db_api_key not in masked_values
+
+    if env_key_valid:
+        api_key = env_api_key
+    elif db_key_valid:
+        api_key = db_api_key
+    else:
+        api_key = ""
+
+    if env_api_base and env_api_base not in masked_values:
+        api_base = env_api_base
+    elif config.get("api_base"):
+        api_base = config.get("api_base")
+    else:
+        api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    model = config.get("model") or "qwen-plus"
+    return {**config, "api_key": api_key, "api_base": api_base, "model": model}
 
 
 async def build_settings_response(db: AsyncSession) -> Dict[str, Any]:
@@ -197,6 +302,16 @@ async def lifespan(app: FastAPI):
     
     # Start scheduler
     start_scheduler()
+
+    cookie_health = read_platform_cookie_status(DEFAULT_SETTINGS["platform"].keys())
+    for platform, status in cookie_health.items():
+        if status.get("health") not in {"healthy"}:
+            logger.warning(
+                "Cookie health check warning for %s: health=%s issues=%s",
+                platform,
+                status.get("health"),
+                status.get("issues", []),
+            )
     
     yield
     # Shutdown logic if any
@@ -439,6 +554,13 @@ async def get_task_detail(task_id: int, db: AsyncSession = Depends(get_db)):
     task_data["sentiment_distribution"] = sentiment_dist
     task_data["post_count_actual"] = post_count
     task_data["comment_count_actual"] = comment_count
+    task_data.update(
+        build_task_runtime_diagnostics(
+            task,
+            post_count_actual=post_count,
+            comment_count_actual=comment_count,
+        )
+    )
     
     return task_data
 
@@ -541,6 +663,44 @@ async def update_platform_cookie(
         "message": f"{payload.platform} Cookie 更新成功",
         "platform": payload.platform,
         "cookie_status": read_platform_cookie_status([payload.platform])[payload.platform],
+    }
+
+
+@app.get("/api/settings/platform-cookie/health")
+async def get_platform_cookie_health(
+    platform: Optional[str] = Query(None, description="平台名称，不传则返回全部平台"),
+    db: AsyncSession = Depends(get_db),
+):
+    platform_config = await get_setting_value(db, "platform")
+    platforms = [platform] if platform else list(platform_config.keys())
+    unsupported = [item for item in platforms if item not in platform_config]
+    if unsupported:
+        raise HTTPException(status_code=400, detail=f"Unsupported platform: {', '.join(unsupported)}")
+
+    health_status = read_platform_cookie_status(platforms)
+    return {
+        "platforms": platforms,
+        "cookie_health": health_status,
+    }
+
+
+@app.get("/api/settings/platform-crawler")
+async def get_platform_crawler_settings(
+    platform: Optional[str] = Query(None, description="平台名称，不传则返回全部平台"),
+    db: AsyncSession = Depends(get_db),
+):
+    platform_config = await get_setting_value(db, "platform")
+    if platform:
+        if platform not in platform_config:
+            raise HTTPException(status_code=400, detail=f"Unsupported platform: {platform}")
+        return {
+            "platform": platform,
+            "crawler": get_platform_crawler_config(platform, platform_config),
+        }
+
+    return {
+        item: get_platform_crawler_config(item, platform_config)
+        for item in platform_config.keys()
     }
 
 # Analysis Data Preview Routes
@@ -818,6 +978,7 @@ async def agent_chat(request: AgentChatRequest, db: AsyncSession = Depends(get_d
     # Agent 层只做调度，不改动现有采集、分析和问答主链路。
     llm_config = await get_llm_runtime_config(db)
     agent_config = await get_setting_value(db, "agent")
+    agent_config["platform_settings"] = await get_setting_value(db, "platform")
     agent = OpinionAgent(db=db, llm_config=llm_config, agent_config=agent_config)
     result = await agent.run_detail(request.query, request.session_id)
     return result

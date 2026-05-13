@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from playwright.async_api import BrowserContext, Page
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from .exception import DataFetchError
 
@@ -42,6 +41,7 @@ class DouyinClient:
         headers: Dict[str, str],
         playwright_page: Page,
         cookie_dict: Dict[str, str],
+        request_retry_attempts: int = 5,
     ):
         self.proxy = proxy
         self.timeout = timeout
@@ -51,6 +51,7 @@ class DouyinClient:
         self.cookie_dict = cookie_dict
         self.sign_script_path = os.path.join(os.path.dirname(__file__), "douyin_sign.js")
         self._sign_script_loaded = False
+        self.request_retry_attempts = max(1, int(request_retry_attempts))
 
     async def _ensure_sign_script_loaded(self) -> None:
         if self._sign_script_loaded:
@@ -142,25 +143,50 @@ class DouyinClient:
 
         return data
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_random_exponential(min=1, max=10),
-        retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout, DataFetchError)),
-        reraise=True,
-    )
+    @staticmethod
+    def _classify_response_text(response_text: str) -> tuple[str, str] | None:
+        text = response_text or ""
+        lower_text = text.lower()
+        if not text.strip() or text.strip() == "blocked":
+            return "blocked", "抖音接口返回空内容或 blocked，可能被风控拦截"
+        if "captcha" in lower_text or "验证" in text:
+            return "captcha", "抖音请求命中验证码校验"
+        if "login" in lower_text or "未登录" in text:
+            return "login_required", "抖音登录态可能已失效"
+        return None
+
     async def request(self, method: str, url: str, **kwargs) -> Dict[str, Any]:
-        try:
-            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True) as client:
-                response = await client.request(method, url, timeout=self.timeout, **kwargs)
-            response.raise_for_status()
-            if not response.text or response.text == "blocked":
-                raise DataFetchError("抖音接口返回空内容或被风控拦截")
-            return response.json()
-        except json.JSONDecodeError as exc:
-            logger.error(f"Douyin response is not valid JSON: {response.text[:500]}")
-            raise DataFetchError("抖音接口返回了非 JSON 内容") from exc
-        except httpx.HTTPError as exc:
-            raise DataFetchError(f"抖音请求失败: {exc}") from exc
+        last_error: Exception | None = None
+        for attempt in range(1, self.request_retry_attempts + 1):
+            try:
+                async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True) as client:
+                    response = await client.request(method, url, timeout=self.timeout, **kwargs)
+                response.raise_for_status()
+                fingerprint = self._classify_response_text(response.text)
+                if fingerprint:
+                    raise DataFetchError(fingerprint[1], fingerprint=fingerprint[0])
+                return response.json()
+            except json.JSONDecodeError as exc:
+                logger.error(f"Douyin response is not valid JSON: {response.text[:500]}")
+                last_error = DataFetchError("抖音接口返回了非 JSON 内容", fingerprint="empty_json")
+            except (httpx.ConnectError, httpx.ReadTimeout, DataFetchError) as exc:
+                last_error = exc
+            except httpx.HTTPError as exc:
+                last_error = DataFetchError(f"抖音请求失败: {exc}")
+
+            logger.warning(
+                "Douyin request attempt %s/%s failed: %s %s error=%s",
+                attempt,
+                self.request_retry_attempts,
+                method,
+                url,
+                last_error,
+            )
+            if attempt >= self.request_retry_attempts:
+                raise last_error
+            await asyncio.sleep(min(2 ** (attempt - 1) + random.random(), 10))
+
+        raise DataFetchError("抖音请求失败")
 
     async def get(self, uri: str, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None):
         request_headers = headers or self.headers
@@ -244,12 +270,17 @@ class DouyinClient:
         crawl_interval: float = 1.0,
         is_fetch_sub_comments: bool = False,
         max_count: int = 100,
+        max_pages: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
         has_more = 1
         cursor = 0
+        page_count = 0
 
         while has_more and len(result) < max_count:
+            page_count += 1
+            if max_pages is not None and page_count > max_pages:
+                break
             comments_res = await self.get_aweme_comments(aweme_id, cursor)
             has_more = comments_res.get("has_more", 0)
             cursor = comments_res.get("cursor", 0)

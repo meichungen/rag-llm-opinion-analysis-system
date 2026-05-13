@@ -13,9 +13,7 @@ from app.core.database import AsyncSessionLocal
 from app.core.settings import DEFAULT_SETTINGS
 from app.models.sql_models import Task, Post, Comment, Sentiment, AnalysisResult, SystemConfig
 from app.crawler.crawler import SocialMediaCrawler
-from app.sentiment.analyzer import SentimentAnalyzer
 from app.services.dashboard_service import DashboardService
-from app.services.text_analysis import TextAnalysisService
 
 logger = logging.getLogger(__name__)
 USER_CONTROL_MESSAGES = {"任务已暂停", "Stopped by user"}
@@ -186,6 +184,8 @@ async def run_task_logic(task_id: int):
                     logger.info(f"Starting sentiment analysis for {total_comments} comments")
                     
                     # 初始化分析器（使用全局单例）
+                    from app.sentiment.analyzer import SentimentAnalyzer
+
                     analyzer = SentimentAnalyzer()
                     
                     # 情感分析采用分批处理方式，
@@ -257,6 +257,8 @@ async def run_task_logic(task_id: int):
                     
                     # Perform Word Cloud and LDA Analysis
                     logger.info(f"Performing multi-source text analysis for task {task_id}")
+                    from app.services.text_analysis import TextAnalysisService
+
                     text_service = TextAnalysisService()
                     
                     # Get all text content

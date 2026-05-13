@@ -1,3 +1,7 @@
 class DataFetchError(Exception):
     """Raised when Douyin data could not be fetched or parsed."""
-
+    def __init__(self, message: str, *, fingerprint: str | None = None, details: dict | None = None):
+        super().__init__(message)
+        self.message = message
+        self.fingerprint = fingerprint
+        self.details = details or {}

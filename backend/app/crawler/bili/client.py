@@ -1,12 +1,11 @@
 import asyncio
 import json
 import random
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Tuple
 from urllib.parse import urlencode
 import time
 import httpx
-from playwright.async_api import BrowserContext, Page
-from tenacity import retry, stop_after_attempt, retry_if_exception_type, wait_random_exponential
+from playwright.async_api import Page
 import logging
 
 from .exception import DataFetchError
@@ -23,6 +22,8 @@ class BilibiliClient:
         headers: Dict[str, str],
         playwright_page: Page,
         cookie_dict: Dict[str, str],
+        request_retry_attempts: int = 5,
+        enable_unsigned_search_fallback: bool = True,
     ):
         self.proxy = proxy
         self.timeout = timeout
@@ -30,47 +31,69 @@ class BilibiliClient:
         self._host = "https://api.bilibili.com"
         self.playwright_page = playwright_page
         self.cookie_dict = cookie_dict
+        self._wbi_keys_cache: Tuple[str, str] | None = None
+        self.request_retry_attempts = max(1, int(request_retry_attempts))
+        self.enable_unsigned_search_fallback = enable_unsigned_search_fallback
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_random_exponential(min=1, max=10),
-        retry=retry_if_exception_type((httpx.ConnectError, httpx.ReadTimeout, DataFetchError)),
-        reraise=True,
-    )
+    @staticmethod
+    def _classify_response_text(response_text: str) -> tuple[str, str] | None:
+        text = response_text or ""
+        lower_text = text.lower()
+        if "错误号: 412" in text or "security control policy" in lower_text:
+            return "bilibili_412", "Bilibili 请求触发 412 风控拦截"
+        if "captcha" in lower_text or "验证" in text:
+            return "captcha", "Bilibili 请求命中验证码校验"
+        return None
+
     async def request(self, method, url, **kwargs) -> Any:
-        try:
-            proxy = None
-            if self.proxy:
-                proxy = self.proxy
-            
-            # Use 'proxy' argument for httpx >= 0.28.0 compatibility if needed, 
-            # or 'proxies' for older versions. 
-            # But the error says "unexpected keyword argument 'proxies'", which is strange because httpx usually supports proxies (dict) or proxy (str).
-            # Wait, httpx < 0.28 uses 'proxies' (dict), >= 0.28 deprecated it in favor of 'proxy' (str or url) or mount?
-            # Actually, recent httpx removed 'proxies' dict in favor of 'proxy' or 'mounts'.
-            # Let's check the version. We saw httpx 0.28.1 earlier.
-            # In 0.28.1, we should use 'proxy' parameter instead of 'proxies' if it's a single proxy, 
-            # or pass it to transport.
-            
-            async with httpx.AsyncClient(proxy=proxy) as client:
-                response = await client.request(method, url, timeout=self.timeout, **kwargs)
+        last_error: Exception | None = None
+        proxy = self.proxy or None
+        for attempt in range(1, self.request_retry_attempts + 1):
             try:
-                data: Dict = response.json()
-            except json.JSONDecodeError:
-                logger.error(f"[BilibiliClient.request] Failed to decode JSON from response. status_code: {response.status_code}, response_text: {response.text}")
-                raise DataFetchError(f"Failed to decode JSON, content: {response.text}")
-            if data.get("code") != 0:
-                logger.error(f"[BilibiliClient.request] API Error: {data.get('message')}")
-                # 如果是 -101 (账号未登录) 或其他 auth 错误，可能需要刷新 cookie
-                # 这里暂时抛出异常
-                raise DataFetchError(data.get("message", "unknown error"))
-            else:
+                async with httpx.AsyncClient(proxy=proxy) as client:
+                    response = await client.request(method, url, timeout=self.timeout, **kwargs)
+                try:
+                    data: Dict = response.json()
+                except json.JSONDecodeError:
+                    fingerprint = self._classify_response_text(response.text)
+                    if fingerprint:
+                        raise DataFetchError(
+                            fingerprint[1],
+                            fingerprint=fingerprint[0],
+                            details={"status_code": response.status_code},
+                        )
+                    logger.error(
+                        f"[BilibiliClient.request] Failed to decode JSON from response. "
+                        f"status_code: {response.status_code}, response_text: {response.text[:500]}"
+                    )
+                    raise DataFetchError("Bilibili 接口返回了非 JSON 内容", fingerprint="empty_json")
+                if data.get("code") != 0:
+                    code = data.get("code")
+                    message = data.get("message", "unknown error")
+                    logger.error(f"[BilibiliClient.request] API Error: code={code} message={message}")
+                    if code == -101:
+                        raise DataFetchError("Bilibili 账号未登录或登录态失效", fingerprint="login_required")
+                    raise DataFetchError(message)
                 return data.get("data", {})
-        except Exception as e:
-            logger.error(f"Request failed: {method} {url} kwargs={kwargs.keys()} error: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            raise e
+            except (httpx.ConnectError, httpx.ReadTimeout, DataFetchError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Bilibili request attempt %s/%s failed: %s %s error=%s",
+                    attempt,
+                    self.request_retry_attempts,
+                    method,
+                    url,
+                    exc,
+                )
+                if attempt >= self.request_retry_attempts:
+                    raise exc
+                await asyncio.sleep(min(2 ** (attempt - 1) + random.random(), 10))
+            except Exception as e:
+                logger.error(f"Request failed: {method} {url} kwargs={kwargs.keys()} error: {e}")
+                raise e
+        if last_error:
+            raise last_error
+        raise DataFetchError("Bilibili 请求失败")
 
     async def pre_request_data(self, req_data: Dict) -> Dict:
         """
@@ -85,6 +108,9 @@ class BilibiliClient:
         """
         获取最新的 img_key 和 sub_key
         """
+        if self._wbi_keys_cache:
+            return self._wbi_keys_cache
+
         # 尝试从 localStorage 获取
         try:
             local_storage = await self.playwright_page.evaluate("() => window.localStorage")
@@ -99,19 +125,25 @@ class BilibiliClient:
                 img_url, sub_url = wbi_img_urls.split("-")
                 img_key = img_url.rsplit('/', 1)[1].split('.')[0]
                 sub_key = sub_url.rsplit('/', 1)[1].split('.')[0]
-                return img_key, sub_key
+                self._wbi_keys_cache = (img_key, sub_key)
+                return self._wbi_keys_cache
         except Exception as e:
             logger.warning(f"Failed to get wbi keys from local storage: {e}")
 
         # 如果失败，请求 nav 接口
         try:
             # 不需要签名
-            resp = await self.request(method="GET", url=self._host + "/x/web-interface/nav")
+            resp = await self.request(
+                method="GET",
+                url=self._host + "/x/web-interface/nav",
+                headers=self.headers,
+            )
             img_url: str = resp['wbi_img']['img_url']
             sub_url: str = resp['wbi_img']['sub_url']
             img_key = img_url.rsplit('/', 1)[1].split('.')[0]
             sub_key = sub_url.rsplit('/', 1)[1].split('.')[0]
-            return img_key, sub_key
+            self._wbi_keys_cache = (img_key, sub_key)
+            return self._wbi_keys_cache
         except Exception as e:
             logger.error(f"Failed to get wbi keys from nav: {e}")
             # 返回默认值或者抛出异常，这里返回空字符串会导致签名失败
@@ -133,8 +165,8 @@ class BilibiliClient:
         page: int = 1,
         page_size: int = 20,
     ) -> Dict:
-        # Use wbi signing for better reliability
-        uri = "/x/web-interface/wbi/search/type"
+        signed_uri = "/x/web-interface/wbi/search/type"
+        unsigned_uri = "/x/web-interface/search/type"
         params = {
             "search_type": "video",
             "keyword": keyword,
@@ -142,7 +174,13 @@ class BilibiliClient:
             "page_size": page_size,
             "order": "totalrank", # 综合排序
         }
-        return await self.get(uri, params, enable_params_sign=True)
+        try:
+            return await self.get(signed_uri, params, enable_params_sign=True)
+        except DataFetchError as exc:
+            if not self.enable_unsigned_search_fallback:
+                raise
+            logger.warning(f"WBI search failed for page {page}, fallback to unsigned search: {exc}")
+            return await self.get(unsigned_uri, params, enable_params_sign=False)
 
     async def get_video_info(self, bvid: str) -> Dict:
         uri = "/x/web-interface/view/detail"

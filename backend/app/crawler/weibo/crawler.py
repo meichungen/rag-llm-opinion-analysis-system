@@ -13,12 +13,13 @@ from .exception import DataFetchError
 logger = logging.getLogger(__name__)
 
 class WeiboCrawler:
-    def __init__(self, browser: Browser):
+    def __init__(self, browser: Browser, config: Optional[Dict] = None):
         self.browser = browser
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.client: Optional[WeiboClient] = None
         self.mobile_index_url = "https://m.weibo.cn"
+        self.config = config or {}
 
     async def init_client(self):
         """Initialize the WeiboClient with cookies from the browser context"""

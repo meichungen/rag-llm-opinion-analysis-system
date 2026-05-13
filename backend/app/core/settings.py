@@ -1,7 +1,7 @@
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_ROOT.parent
@@ -81,11 +81,29 @@ DEFAULT_SETTINGS = {
             "enabled": True,
             "max_posts_per_request": 80,
             "request_delay": 3,
+            "crawler": {
+                "search_retry_attempts": 3,
+                "request_retry_attempts": 5,
+                "max_search_pages": 6,
+                "comment_retry_attempts": 2,
+                "max_comment_pages": 10,
+                "fetch_sub_comments": True,
+                "allow_guest_mode": True,
+            },
         },
         "bilibili": {
             "enabled": True,
             "max_posts_per_request": 50,
             "request_delay": 2,
+            "crawler": {
+                "search_retry_attempts": 3,
+                "request_retry_attempts": 5,
+                "max_search_pages": 5,
+                "comment_retry_attempts": 2,
+                "max_comment_pages": 100,
+                "enable_unsigned_search_fallback": True,
+                "enable_unsigned_comment_fallback": True,
+            },
         },
         "xhs": {
             "enabled": False,
@@ -98,6 +116,20 @@ DEFAULT_SETTINGS = {
 
 def get_default_setting(key: str):
     return deepcopy(DEFAULT_SETTINGS.get(key, {}))
+
+
+def get_platform_crawler_config(
+    platform: str,
+    platform_settings: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    default_platform_config = deepcopy(DEFAULT_SETTINGS["platform"].get(platform, {}))
+    runtime_platform_config = deepcopy((platform_settings or {}).get(platform, {}))
+    merged_platform_config = {**default_platform_config, **runtime_platform_config}
+    merged_platform_config["crawler"] = {
+        **default_platform_config.get("crawler", {}),
+        **runtime_platform_config.get("crawler", {}),
+    }
+    return merged_platform_config.get("crawler", {})
 
 
 def get_cookie_file_path(platform: str) -> Path:
@@ -185,6 +217,54 @@ def normalize_cookie_content(raw_content: str) -> Dict[str, object]:
     }
 
 
+def _extract_cookie_names(normalized_content: str, content_format: str) -> List[str]:
+    if content_format == "json":
+        parsed = json.loads(normalized_content)
+        cookie_list = parsed.get("cookies") if isinstance(parsed, dict) else parsed
+        if not isinstance(cookie_list, list):
+            return []
+        return [str(item.get("name")) for item in cookie_list if isinstance(item, dict) and item.get("name")]
+    return [name for name, _ in _extract_cookie_pairs(normalized_content)]
+
+
+def _required_cookie_keys(platform: str) -> List[str]:
+    required = {
+        "bilibili": ["SESSDATA", "bili_jct", "buvid3"],
+        "douyin": ["ttwid", "passport_csrf_token"],
+        "weibo": ["SUB", "SUBP"],
+        "zhihu": ["z_c0"],
+    }
+    return required.get(platform, [])
+
+
+def inspect_cookie_health(platform: str, raw_content: str) -> Dict[str, object]:
+    normalized = normalize_cookie_content(raw_content)
+    cookie_names = _extract_cookie_names(str(normalized["content"]), str(normalized["format"]))
+    cookie_name_set = {name for name in cookie_names if name}
+    required_keys = _required_cookie_keys(platform)
+    missing_keys = [key for key in required_keys if key not in cookie_name_set]
+    issues: List[str] = []
+
+    if int(normalized["cookie_count"]) < max(1, len(required_keys)):
+        issues.append("Cookie 数量偏少，可能不是完整登录态。")
+    if missing_keys:
+        issues.append(f"缺少关键 Cookie: {', '.join(missing_keys)}")
+
+    health = "healthy"
+    if issues:
+        health = "warning"
+
+    return {
+        "health": health,
+        "issues": issues,
+        "required_keys": required_keys,
+        "missing_keys": missing_keys,
+        "cookie_names": cookie_names,
+        "cookie_count": normalized["cookie_count"],
+        "format": normalized["format"],
+    }
+
+
 def read_cookie_metadata(platform: str) -> Dict[str, object]:
     file_path = get_cookie_file_path(platform)
     if not file_path.exists():
@@ -201,17 +281,39 @@ def read_cookie_metadata(platform: str) -> Dict[str, object]:
             "cookie_count": 0,
             "updated_at": None,
             "format": None,
+            "health": "missing",
+            "issues": ["未找到 Cookie 文件"],
+            "required_keys": _required_cookie_keys(platform),
+            "missing_keys": _required_cookie_keys(platform),
         }
 
     raw_content = file_path.read_text(encoding="utf-8").strip()
-    normalized = normalize_cookie_content(raw_content)
     stat = file_path.stat()
+    try:
+        health_report = inspect_cookie_health(platform, raw_content)
+    except ValueError as exc:
+        return {
+            "has_cookie": True,
+            "cookie_file": str(file_path),
+            "cookie_count": 0,
+            "updated_at": int(stat.st_mtime),
+            "format": None,
+            "health": "error",
+            "issues": [str(exc)],
+            "required_keys": _required_cookie_keys(platform),
+            "missing_keys": _required_cookie_keys(platform),
+        }
+
     return {
         "has_cookie": True,
         "cookie_file": str(file_path),
-        "cookie_count": normalized["cookie_count"],
+        "cookie_count": health_report["cookie_count"],
         "updated_at": int(stat.st_mtime),
-        "format": normalized["format"],
+        "format": health_report["format"],
+        "health": health_report["health"],
+        "issues": health_report["issues"],
+        "required_keys": health_report["required_keys"],
+        "missing_keys": health_report["missing_keys"],
     }
 
 

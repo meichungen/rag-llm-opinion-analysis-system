@@ -15,6 +15,11 @@ import {
   Table,
   Tag,
   Modal,
+  Alert,
+  Divider,
+  Descriptions,
+  Collapse,
+  Empty,
 } from 'antd';
 import {
   SaveOutlined,
@@ -30,6 +35,7 @@ const { Title, Text } = Typography;
 const { TabPane } = Tabs;
 const { TextArea } = Input;
 const { Option } = Select;
+const { Panel } = Collapse;
 type PlatformKey = 'weibo' | 'douyin' | 'bilibili' | 'xhs';
 
 interface User {
@@ -46,6 +52,7 @@ interface PlatformSetting {
   enabled: boolean;
   max_posts_per_request: number;
   request_delay: number;
+  crawler?: Record<string, string | number | boolean>;
 }
 
 type PlatformConfig = Record<PlatformKey, PlatformSetting>;
@@ -56,7 +63,17 @@ interface PlatformCookieStatus {
   cookie_count: number;
   updated_at: number | null;
   format: 'json' | 'raw' | null;
+  health?: 'healthy' | 'warning' | 'error' | 'missing';
+  issues?: string[];
+  required_keys?: string[];
+  missing_keys?: string[];
 }
+
+interface PlatformCrawlerSettings {
+  [key: string]: string | number | boolean;
+}
+
+type PlatformCrawlerConfigMap = Partial<Record<PlatformKey, PlatformCrawlerSettings>>;
 
 const PLATFORM_NAMES: Record<PlatformKey, string> = {
   weibo: '微博',
@@ -102,6 +119,7 @@ const SettingsPage: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [platformConfig, setPlatformConfig] = useState<PlatformConfig>(DEFAULT_PLATFORM_CONFIG);
   const [platformCookieStatus, setPlatformCookieStatus] = useState<Partial<Record<PlatformKey, PlatformCookieStatus>>>({});
+  const [platformCrawlerConfig, setPlatformCrawlerConfig] = useState<PlatformCrawlerConfigMap>({});
   const [cookieInputs, setCookieInputs] = useState<Record<PlatformKey, string>>(EMPTY_COOKIE_INPUTS);
   const [cookieSavingPlatform, setCookieSavingPlatform] = useState<PlatformKey | null>(null);
 
@@ -120,6 +138,91 @@ const SettingsPage: React.FC = () => {
     xhs: { ...DEFAULT_PLATFORM_CONFIG.xhs, ...(value?.xhs || {}) },
   });
 
+  const fetchPlatformDiagnostics = async () => {
+    const [cookieHealthResponse, crawlerResponse] = await Promise.all([
+      api.get(endpoints.settingsPlatformCookieHealth),
+      api.get(endpoints.settingsPlatformCrawler),
+    ]);
+
+    if (cookieHealthResponse.data?.cookie_health) {
+      setPlatformCookieStatus(cookieHealthResponse.data.cookie_health);
+    }
+    if (crawlerResponse.data) {
+      setPlatformCrawlerConfig(crawlerResponse.data);
+      setPlatformConfig(prev => {
+        const next = { ...prev };
+        (Object.entries(crawlerResponse.data) as [PlatformKey, PlatformCrawlerSettings][]).forEach(([platform, crawler]) => {
+          if (!next[platform]) {
+            return;
+          }
+          next[platform] = {
+            ...next[platform],
+            crawler: crawler || {},
+          };
+        });
+        return next;
+      });
+    }
+  };
+
+  const getCookieHealthColor = (health?: PlatformCookieStatus['health']) => {
+    switch (health) {
+      case 'healthy':
+        return 'green';
+      case 'warning':
+        return 'orange';
+      case 'error':
+        return 'red';
+      case 'missing':
+      default:
+        return 'default';
+    }
+  };
+
+  const getCookieHealthLabel = (health?: PlatformCookieStatus['health']) => {
+    switch (health) {
+      case 'healthy':
+        return '健康';
+      case 'warning':
+        return '需关注';
+      case 'error':
+        return '异常';
+      case 'missing':
+      default:
+        return '未配置';
+    }
+  };
+
+  const renderCrawlerConfigInput = (
+    platform: PlatformKey,
+    field: string,
+    value: string | number | boolean
+  ) => {
+    if (typeof value === 'boolean') {
+      return (
+        <Switch
+          checked={value}
+          onChange={(checked) => updatePlatformCrawlerField(platform, field, checked)}
+        />
+      );
+    }
+
+    return (
+      <Input
+        type={typeof value === 'number' ? 'number' : 'text'}
+        value={String(value)}
+        onChange={(e) => {
+          const rawValue = e.target.value;
+          updatePlatformCrawlerField(
+            platform,
+            field,
+            typeof value === 'number' ? Number(rawValue || 0) : rawValue
+          );
+        }}
+      />
+    );
+  };
+
   const updatePlatformField = <K extends keyof PlatformSetting>(
     platform: PlatformKey,
     field: K,
@@ -129,6 +232,30 @@ const SettingsPage: React.FC = () => {
       ...prev,
       [platform]: {
         ...prev[platform],
+        [field]: value,
+      },
+    }));
+  };
+
+  const updatePlatformCrawlerField = (
+    platform: PlatformKey,
+    field: string,
+    value: string | number | boolean
+  ) => {
+    setPlatformConfig(prev => ({
+      ...prev,
+      [platform]: {
+        ...prev[platform],
+        crawler: {
+          ...(prev[platform].crawler || {}),
+          [field]: value,
+        },
+      },
+    }));
+    setPlatformCrawlerConfig(prev => ({
+      ...prev,
+      [platform]: {
+        ...(prev[platform] || {}),
         [field]: value,
       },
     }));
@@ -169,6 +296,7 @@ const SettingsPage: React.FC = () => {
       if (settings.platform_cookie_status) {
         setPlatformCookieStatus(settings.platform_cookie_status);
       }
+      await fetchPlatformDiagnostics();
       
     } catch (error) {
       console.error('获取设置失败:', error);
@@ -237,6 +365,22 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleResetCrawlerConfig = (platform: PlatformKey) => {
+    const defaultCrawler = DEFAULT_PLATFORM_CONFIG[platform].crawler || {};
+    setPlatformConfig(prev => ({
+      ...prev,
+      [platform]: {
+        ...prev[platform],
+        crawler: defaultCrawler,
+      },
+    }));
+    setPlatformCrawlerConfig(prev => ({
+      ...prev,
+      [platform]: defaultCrawler,
+    }));
+    message.success(`${PLATFORM_NAMES[platform]} crawler 配置已恢复为默认值，请记得保存平台配置`);
+  };
+
   const handlePlatformCookieSave = async (platform: PlatformKey) => {
     const cookieContent = cookieInputs[platform]?.trim();
     if (!cookieContent) {
@@ -257,6 +401,7 @@ const SettingsPage: React.FC = () => {
           [platform]: response.data.cookie_status,
         }));
       }
+      await fetchPlatformDiagnostics();
       message.success(`${PLATFORM_NAMES[platform]} Cookie 更新成功`);
     } catch (error) {
       console.error('更新 Cookie 失败:', error);
@@ -479,6 +624,7 @@ const SettingsPage: React.FC = () => {
             <Space direction="vertical" style={{ width: '100%' }}>
               {(Object.entries(platformConfig) as [PlatformKey, PlatformSetting][]).map(([platform, config]) => {
                 const cookieStatus = platformCookieStatus[platform];
+                const crawlerSettings = platformCrawlerConfig[platform];
                 const updatedAt = cookieStatus?.updated_at
                   ? new Date(cookieStatus.updated_at * 1000).toLocaleString()
                   : '未配置';
@@ -490,6 +636,9 @@ const SettingsPage: React.FC = () => {
                         <Space wrap>
                           <Tag color={cookieStatus?.has_cookie ? 'green' : 'default'}>
                             {cookieStatus?.has_cookie ? '已配置 Cookie' : '未配置 Cookie'}
+                          </Tag>
+                          <Tag color={getCookieHealthColor(cookieStatus?.health)}>
+                            健康度: {getCookieHealthLabel(cookieStatus?.health)}
                           </Tag>
                           <Text type="secondary">
                             文件：{cookieStatus?.cookie_file || '未生成'}
@@ -504,6 +653,34 @@ const SettingsPage: React.FC = () => {
                             更新时间：{updatedAt}
                           </Text>
                         </Space>
+                      </Col>
+                      <Col span={24}>
+                        {cookieStatus?.issues?.length ? (
+                          <Alert
+                            type={cookieStatus.health === 'error' ? 'error' : 'warning'}
+                            showIcon
+                            message="Cookie 健康检查"
+                            description={
+                              <Space direction="vertical" size={4}>
+                                {cookieStatus.issues.map((issue) => (
+                                  <Text key={issue}>{issue}</Text>
+                                ))}
+                                {cookieStatus.required_keys?.length ? (
+                                  <Text type="secondary">
+                                    关键字段: {cookieStatus.required_keys.join(', ')}
+                                  </Text>
+                                ) : null}
+                              </Space>
+                            }
+                          />
+                        ) : (
+                          <Alert
+                            type="success"
+                            showIcon
+                            message="Cookie 健康检查"
+                            description="当前 Cookie 状态正常，关键字段完整。"
+                          />
+                        )}
                       </Col>
                       <Col span={6}>
                         <Switch
@@ -577,6 +754,30 @@ const SettingsPage: React.FC = () => {
                           </Text>
                         </Space>
                       </Col>
+                      <Col span={24}>
+                        <Divider style={{ margin: '8px 0' }}>Crawler 运行配置</Divider>
+                        {crawlerSettings && Object.keys(crawlerSettings).length > 0 ? (
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            <Descriptions
+                              size="small"
+                              bordered
+                              column={1}
+                              items={Object.entries(crawlerSettings).map(([key, value]) => ({
+                                key,
+                                label: key,
+                                children: renderCrawlerConfigInput(platform, key, value),
+                              }))}
+                            />
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                              <Button onClick={() => handleResetCrawlerConfig(platform)}>
+                                恢复默认 crawler 配置
+                              </Button>
+                            </div>
+                          </Space>
+                        ) : (
+                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前平台暂无额外 crawler 配置" />
+                        )}
+                      </Col>
                     </Row>
                   </Card>
                 );
@@ -585,6 +786,14 @@ const SettingsPage: React.FC = () => {
               <Button type="primary" onClick={handlePlatformConfigSave} loading={loading}>
                 <SaveOutlined /> 保存平台配置
               </Button>
+              <Collapse ghost>
+                <Panel header="说明：Cookie 健康与 crawler 配置怎么看" key="platform-tips">
+                  <Space direction="vertical">
+                    <Text>Cookie 健康用于检查登录态是否完整，缺少关键字段时会直接给出告警。</Text>
+                    <Text>crawler 配置来自后端运行参数，包含重试次数、分页上限和降级开关，便于排查抓取行为。</Text>
+                  </Space>
+                </Panel>
+              </Collapse>
             </Space>
           </Card>
         </TabPane>

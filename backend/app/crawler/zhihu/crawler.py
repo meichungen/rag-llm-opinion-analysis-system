@@ -11,10 +11,11 @@ from playwright.async_api import Browser, BrowserContext, Page
 logger = logging.getLogger(__name__)
 
 class ZhihuCrawler:
-    def __init__(self, browser: Browser):
+    def __init__(self, browser: Browser, config: Optional[Dict] = None):
         self.browser = browser
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self.config = config or {}
 
     async def search_posts(self, keyword: str, count: int = 100) -> List[Dict]:
         """Mock search posts for Zhihu"""

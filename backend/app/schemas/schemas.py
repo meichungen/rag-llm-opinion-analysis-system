@@ -16,6 +16,7 @@ class Task(TaskBase):
     user_id: int
     status: str
     progress: float
+    progress_message: Optional[str] = None
     created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -29,6 +30,9 @@ class TaskDetail(Task):
     # Additional fields for detail view
     post_count_actual: Optional[int] = None # Renamed to avoid conflict with config
     comment_count_actual: Optional[int] = None
+    warnings: Optional[List[Dict[str, Any]]] = None
+    risk_fingerprints: Optional[List[Dict[str, Any]]] = None
+    diagnostics: Optional[Dict[str, Any]] = None
     
 class TaskListResponse(BaseModel):
     tasks: List[Task]
@@ -132,6 +136,7 @@ class AgentChatResponse(BaseModel):
     observation_summary: Optional[str] = None
     short_memory_turns: Optional[int] = None
     long_memory_hits: Optional[int] = None
+    tool_observation: Optional[Dict[str, Any]] = None
 
 class HotTopicBase(BaseModel):
     source: str

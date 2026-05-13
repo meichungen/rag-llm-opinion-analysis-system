@@ -16,7 +16,10 @@ import {
   InputNumber,
   Form,
   Space,
-  message
+  message,
+  Alert,
+  Descriptions,
+  Divider,
 } from 'antd';
 import { 
   PieChartOutlined, 
@@ -52,12 +55,49 @@ interface AnalysisData {
   };
 }
 
+interface TaskRiskFingerprint {
+  code: string;
+  message: string;
+}
+
+interface TaskWarning {
+  scope: string;
+  message: string;
+  risk_fingerprints?: TaskRiskFingerprint[];
+}
+
+interface TaskDetailData {
+  id: number;
+  platform: string;
+  keyword: string;
+  status: string;
+  progress: number;
+  progress_message?: string;
+  post_count: number;
+  comment_count: number;
+  post_count_actual?: number;
+  comment_count_actual?: number;
+  warnings?: TaskWarning[];
+  risk_fingerprints?: TaskRiskFingerprint[];
+  diagnostics?: Record<string, any>;
+}
+
+const RISK_LABELS: Record<string, string> = {
+  bilibili_412: '412 风控',
+  captcha: '验证码',
+  login_required: '登录失效',
+  empty_json: '空返回/非 JSON',
+  blocked: '请求拦截',
+  wbi_failed: 'WBI 失败',
+};
+
 const AnalysisPage: React.FC = () => {
   const location = useLocation();
   const [loading, setLoading] = useState(false);
   const [analysisData, setAnalysisData] = useState<AnalysisData | null>(null);
   const [selectedTask, setSelectedTask] = useState<number | null>(null);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [taskDetail, setTaskDetail] = useState<TaskDetailData | null>(null);
   
   // Word Cloud State
   const [wordCloudData, setWordCloudData] = useState<{ name: string; value: number }[]>([]);
@@ -126,6 +166,16 @@ const AnalysisPage: React.FC = () => {
       }
     } finally {
       setReportLoading(false);
+    }
+  };
+
+  const fetchTaskDetail = async (taskId: number) => {
+    try {
+      const response = await api.get(`${endpoints.tasks}/${taskId}`);
+      setTaskDetail(response.data);
+    } catch (error) {
+      console.error('获取任务详情失败:', error);
+      setTaskDetail(null);
     }
   };
 
@@ -378,6 +428,7 @@ const AnalysisPage: React.FC = () => {
     if (selectedTask) {
       // Clear previous report
       setReportContent(null);
+      fetchTaskDetail(selectedTask);
       // Try to fetch existing report
       fetchReport(selectedTask, false);
       
@@ -587,7 +638,70 @@ const AnalysisPage: React.FC = () => {
         {!analysisData ? (
           <Empty description="请选择要分析的任务" style={{ marginTop: '100px' }} />
         ) : (
-          <Tabs defaultActiveKey="0">
+          <>
+            <Card style={{ marginBottom: 16 }} title="任务执行与风险摘要">
+              <Row gutter={[16, 16]}>
+                <Col xs={24} lg={8}>
+                  <Statistic title="任务状态" value={taskDetail?.status || '-'} />
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Statistic
+                    title="帖子完成度"
+                    value={`${taskDetail?.post_count_actual ?? 0} / ${taskDetail?.post_count ?? 0}`}
+                  />
+                </Col>
+                <Col xs={24} lg={8}>
+                  <Statistic
+                    title="评论完成度"
+                    value={`${taskDetail?.comment_count_actual ?? 0} / ${taskDetail?.comment_count ?? 0}`}
+                  />
+                </Col>
+              </Row>
+              <Divider />
+              <Descriptions size="small" bordered column={2}>
+                <Descriptions.Item label="平台">{taskDetail?.platform || '-'}</Descriptions.Item>
+                <Descriptions.Item label="关键词">{taskDetail?.keyword || '-'}</Descriptions.Item>
+                <Descriptions.Item label="进度">{taskDetail?.diagnostics?.progress ?? '-'}</Descriptions.Item>
+                <Descriptions.Item label="进度说明">{taskDetail?.progress_message || '-'}</Descriptions.Item>
+              </Descriptions>
+              <div style={{ marginTop: 16 }}>
+                {taskDetail?.warnings?.length ? (
+                  <Alert
+                    type={taskDetail.status === 'failed' ? 'error' : 'warning'}
+                    showIcon
+                    message={`任务告警 ${taskDetail.warnings.length} 条`}
+                    description={
+                      <Space direction="vertical" size={6}>
+                        {taskDetail.warnings.map((warning, index) => (
+                          <div key={`${warning.scope}-${index}`}>
+                            <Text strong>{warning.scope}:</Text> {warning.message}
+                          </div>
+                        ))}
+                      </Space>
+                    }
+                  />
+                ) : (
+                  <Alert type="success" showIcon message="当前任务没有结构化风险告警" />
+                )}
+              </div>
+              <div style={{ marginTop: 16 }}>
+                <Text strong>风险指纹：</Text>
+                <div style={{ marginTop: 8 }}>
+                  {taskDetail?.risk_fingerprints?.length ? (
+                    <Space wrap>
+                      {taskDetail.risk_fingerprints.map((risk, index) => (
+                        <Tag color="volcano" key={`${risk.code}-${index}`}>
+                          {RISK_LABELS[risk.code] || risk.code}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    <Text type="secondary">暂无已识别风控指纹</Text>
+                  )}
+                </div>
+              </div>
+            </Card>
+            <Tabs defaultActiveKey="0">
             {/* 0. AI Report */}
             <TabPane tab={<span><FilePdfOutlined />智能分析报告</span>} key="0">
               <Card>
@@ -738,7 +852,8 @@ const AnalysisPage: React.FC = () => {
                   <ReactECharts option={getSentimentTrendOption()} style={{ height: '400px' }} />
                </Card>
             </TabPane>
-          </Tabs>
+            </Tabs>
+          </>
         )}
       </Spin>
     </div>

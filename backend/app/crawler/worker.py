@@ -4,8 +4,9 @@ import os
 import logging
 from app.crawler.crawler import SocialMediaCrawler
 from app.core.database import AsyncSessionLocal
+from app.core.settings import get_default_setting
 from sqlalchemy.future import select
-from app.models.sql_models import Task
+from app.models.sql_models import SystemConfig, Task
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,7 @@ async def run_crawler_process(task_id: int):
     keyword = None
     post_count = 0
     comment_count = 0
+    platform_settings = get_default_setting("platform")
     
     # Worker 进程启动后先从数据库重新读取任务参数，
     # 使主进程与子进程仅通过 task_id 协同，便于保持职责边界清晰。
@@ -41,6 +43,11 @@ async def run_crawler_process(task_id: int):
             keyword = task.keyword
             post_count = task.post_count
             comment_count = task.comment_count
+
+            platform_config_result = await session.execute(select(SystemConfig).filter_by(key="platform"))
+            platform_config = platform_config_result.scalars().first()
+            if platform_config and isinstance(platform_config.value, dict):
+                platform_settings.update(platform_config.value)
             
             # Update status to crawling in worker (double check)
             task.progress_message = f"Worker: 正在启动 {platform} 爬虫..."
@@ -53,7 +60,7 @@ async def run_crawler_process(task_id: int):
     # 以便在采集异常时将影响范围限制在当前 Worker 内部。
     # 2. Run crawler
     # Note: We create a NEW instance of crawler here
-    crawler = SocialMediaCrawler()
+    crawler = SocialMediaCrawler(platform_settings=platform_settings)
     try:
         async with crawler:
             await crawler.crawl(
