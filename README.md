@@ -231,7 +231,7 @@ Vite 默认前端地址通常为：
 
 `http://127.0.0.1:5173`
 
-前端已在 [vite.config.ts](file:///c:/Users/meichungen/Desktop/project/frontend/vite.config.ts) 中代理 `/api` 到 `http://127.0.0.1:8000`。
+前端已在 [vite.config.ts] 中代理 `/api` 到 `http://127.0.0.1:8000`。
 
 ## 推荐体验路径
 
