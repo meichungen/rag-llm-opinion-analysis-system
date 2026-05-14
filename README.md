@@ -1,4 +1,4 @@
-# 融合 RAG 与 LLM 的多平台舆情智能分析系统
+# 基于ReAct模式的舆情智能分析与问答Agent系统
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)
