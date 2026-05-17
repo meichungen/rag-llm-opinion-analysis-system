@@ -1,4 +1,4 @@
-# 基于ReAct模式的舆情智能分析与问答Agent系统
+# 基于 ReAct 的多平台舆情智能分析与问答 Agent 系统
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)
@@ -6,136 +6,154 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ## 项目简介
-这是一个端到端的多平台舆情智能分析系统，打通了：
 
-`数据采集 -> 情感分析 -> 主题建模 -> RAG 问答 -> Agent 决策 -> 可视化展示 -> 报告导出`
+这是一个面向多平台舆情场景的智能分析系统，覆盖从数据采集、任务执行、文本分析到 Agent 问答和报告导出的完整链路：
 
-系统当前已覆盖微博、B 站、抖音等平台，并补充了基于 Agent 的工具调度能力，适合课程设计、毕业设计。
+```text
+微博 / B站 / 抖音 数据采集
+  -> 评论级情感分析
+  -> 词云与 LDA 主题建模
+  -> RAG 问答
+  -> ReAct 多步 Agent
+  -> 可视化分析
+  -> 报告导出
+```
+
+系统后端基于 FastAPI，前端基于 React + Vite + Ant Design，适合作为 Python 后端、数据采集、RAG 和 Agent 工程化综合项目。
 
 ## 核心亮点
-- `RAG + LLM`：让问答结果尽量基于已采集数据，减少泛化回答和幻觉。
-- `全栈闭环`：从采集、分析到前端展示与报告导出均已串通。
-- `Agent 化升级`：支持自主决策、工具调用、短期记忆、长期检索。
-- `可观测性增强`：支持 Cookie 健康检查、crawler 配置展示、风险指纹识别、结构化工具观测。
-- `工程可扩展`：平台 crawler、Agent、分析模块和前端页面均支持持续扩展。
+
+- **全链路舆情分析**：支持采集任务管理、帖子/评论入库、情感分析、词云、LDA 主题建模、报告导出与可视化展示。
+- **多步 Agent 主链路**：基于 ReAct 思路实现“计划 -> 工具调用 -> 观察 -> 最终回答”的闭环。
+- **标准化 Tool Registry**：为 Agent 工具定义描述、参数 Schema、风险等级和调用约束。
+- **Pydantic 参数校验**：对 LLM 生成的工具参数进行修复和校验，工具失败时支持降级回答。
+- **双层记忆机制**：结合短期会话记忆与长期任务检索，使回答尽量基于已采集任务数据。
+- **Agent 可观测性**：`/api/agent/chat` 返回 `agent_trace`，前端以时间线展示每一步决策、工具、入参、状态、风险等级、耗时与观察结果。
+- **采集风险门控**：对实时采集工具增加安全门控，默认优先分析已有数据，避免 Agent 无确认触发高风险爬虫动作。
+- **平台诊断能力**：支持 Cookie 健康检查、crawler 配置管理、风险指纹识别和任务级诊断摘要。
 
 ## 功能概览
 
 | 模块 | 能力 |
 | :--- | :--- |
-| 多源数据采集 | 支持热榜监控与关键词任务采集，当前适配微博、B 站、抖音 |
-| 舆情分析 | 评论级情感分析、LDA 主题建模、词云与趋势图展示 |
-| RAG 问答 | 基于当前任务上下文检索并生成回答 |
-| Agent 调度 | 单 Agent + ReAct + Tool Use，自主选择工具并输出结构化观测 |
-| 风险诊断 | 识别 `412`、验证码、登录失效、空 JSON、WBI 失败等风险指纹 |
-| 配置与运维 | 设置页可查看 Cookie 健康状态、crawler 配置，并支持恢复默认参数 |
-| 报告导出 | 支持 PDF / Word 报告导出 |
+| 多源数据采集 | 支持微博、B站、抖音关键词采集和热榜监控 |
+| 任务管理 | 创建、暂停、恢复、删除任务，并跟踪执行进度 |
+| 舆情分析 | 评论级情感分析、情感趋势、词云、LDA 主题建模 |
+| RAG 问答 | 基于任务上下文和历史分析结果生成回答 |
+| Agent 调度 | 多步规划、工具调用、观察记录、失败降级和最终回答 |
+| 工具治理 | Tool Registry、Pydantic 参数校验、风险等级和高风险工具门控 |
+| 可观测性 | `agent_trace` 时间线、工具观察、风险指纹、Cookie 健康检查 |
+| 报告导出 | 支持任务分析报告导出 |
 
 ## 技术栈
 
-| 方向 | 方案 |
+| 方向 | 技术 |
 | :--- | :--- |
-| 后端 | FastAPI, SQLAlchemy, APScheduler |
+| 后端 | FastAPI, SQLAlchemy Async, APScheduler, Pydantic |
 | 前端 | React 18, Vite, Ant Design, ECharts |
-| 数据采集 | Playwright, 自研平台 crawler |
-| AI / NLP | Transformers, Sentence-Transformers, Jieba, scikit-learn |
-| 问答与 Agent | 通义千问兼容 OpenAI 接口, 自研 RAG 检索, 单 Agent 调度 |
-| 存储 | MySQL, Redis |
-| 工具链 | uv / pip, npm, Docker |
+| 数据采集 | Playwright, 平台 crawler, Cookie 健康检查 |
+| AI / NLP | LLM, RAG, Transformers, Sentence-Transformers, Jieba, scikit-learn |
+| Agent | ReAct, Tool Use, Tool Registry, 参数校验, Trace 可观测 |
+| 存储 | MySQL, Redis, SQLite 本地调试 |
+| 工程化 | pytest, TypeScript, npm, Docker |
 
 ## Agent 架构
-当前 Agent 层采用 `单 Agent + ReAct + Tool Use` 架构，尽量复用已有 REST API 与分析能力，不重写原有业务主链路。
+
+当前 Agent 采用单 Agent + 多工具协作架构，尽量复用已有业务能力，不重写采集、分析和问答主链路。
 
 ```mermaid
 flowchart TD
-    U[用户问题] --> A[OpinionAgent]
-    A --> M1[短期记忆]
-    A --> M2[长期检索]
-    A --> T1[fetch_data]
-    A --> T2[sentiment_analysis]
-    A --> T3[topic_modeling]
-    A --> T4[vector_search]
-    T1 --> S1[任务 / 帖子 / 评论]
-    T2 --> S2[情感分析模块]
-    T3 --> S3[LDA / 文本分析模块]
-    T4 --> S4[向量索引 / RAG]
-    A --> R[最终回答]
+    U["用户问题"] --> A["OpinionAgent"]
+    A --> M1["短期会话记忆"]
+    A --> M2["长期任务检索"]
+    A --> P["ReAct 多步规划"]
+    P --> TR["Tool Registry"]
+    TR --> V["Pydantic 参数校验"]
+    V --> T1["fetch_data"]
+    V --> T2["sentiment_analysis"]
+    V --> T3["topic_modeling"]
+    V --> T4["vector_search"]
+    V --> T5["crawl_data"]
+    T1 --> D1["任务 / 帖子 / 评论"]
+    T2 --> D2["情感分析模块"]
+    T3 --> D3["LDA / 文本分析模块"]
+    T4 --> D4["长期记忆 / RAG"]
+    T5 --> G["高风险工具门控"]
+    P --> Trace["agent_trace"]
+    Trace --> UI["前端执行轨迹时间线"]
+    A --> R["最终回答"]
 ```
 
-### Agent 当前特性
-- 短期记忆保存最近多轮对话，支持连续追问。
-- 长期记忆支持 `local_embedding / redis_vector / milvus` 等后端。
-- 工具返回已结构化，包含 `status`、`warnings`、`diagnostics`、`risk_fingerprints`。
-- 前端 Agent 页面已支持展示 `tool_observation` 和平台风控面板。
+### Agent 工具
 
-## 新增可观测性能力
+| 工具 | 说明 | 风险等级 |
+| :--- | :--- | :--- |
+| `fetch_data` | 按关键词和平台查询已采集任务数据 | low |
+| `sentiment_analysis` | 对单条文本做情感分析 | low |
+| `topic_modeling` | 基于已采集文本执行 LDA 主题建模 | medium |
+| `vector_search` | 检索长期任务记忆 | low |
+| `crawl_data` | 实时采集平台数据 | high |
+| `summarize_crawled_data` | 对实时采集结果做摘要预处理 | low |
 
-### 1. Cookie 健康检查
-- 设置页可查看平台 Cookie 是否存在、格式、数量、缺失关键字段。
-- 后端接口：
-  - `GET /api/settings/platform-cookie/health`
-  - `POST /api/settings/platform-cookie`
+### Agent 响应观测字段
 
-### 2. Crawler 配置可视化
-- 设置页支持查看并修改平台 crawler 配置，如重试次数、分页上限、降级开关。
-- 后端接口：
-  - `GET /api/settings/platform-crawler`
+`POST /api/agent/chat` 会保留旧字段并额外返回执行轨迹：
 
-### 3. 风险指纹识别
-- 当前已识别的典型风险包括：
-  - `bilibili_412`
-  - `captcha`
-  - `login_required`
-  - `empty_json`
-  - `blocked`
-  - `wbi_failed`
-
-### 4. 任务级诊断摘要
-- 分析页会展示任务执行状态、帖子/评论完成度、任务告警和风险指纹。
-- `GET /api/tasks/{task_id}` 现已返回结构化 `warnings / diagnostics / risk_fingerprints`。
+```json
+{
+  "answer": "...",
+  "used_tool": "fetch_data",
+  "decision_summary": "...",
+  "observation_summary": "...",
+  "tool_observation": {},
+  "agent_trace": [
+    {
+      "step": 1,
+      "thought": "需要先查询历史任务数据",
+      "action": "fetch_data",
+      "parameters": {"keyword": "小米", "platform": "weibo"},
+      "status": "success",
+      "risk_level": "low",
+      "elapsed_ms": 23.4,
+      "observation_summary": "工具已执行"
+    }
+  ]
+}
+```
 
 ## 项目结构
 
 ```text
 project/
-├─ backend/
-│  ├─ app/
-│  │  ├─ agent/          # Agent 决策、记忆、工具调度
-│  │  ├─ crawler/        # 平台 crawler 与 worker
-│  │  ├─ qa/             # RAG / LLM 问答
-│  │  ├─ sentiment/      # 情感分析
-│  │  ├─ services/       # 任务执行、报告、文本分析
-│  │  ├─ schemas/        # Pydantic schema
-│  │  └─ main.py         # FastAPI 入口
-│  └─ run.py             # Windows 友好的启动入口
-├─ frontend/
-│  ├─ src/pages/         # Home / Task / Analysis / Agent / Settings
-│  ├─ src/services/      # API 封装
-│  └─ vite.config.ts
-└─ README.md
+├── backend/
+│   ├── app/
+│   │   ├── agent/          # Agent 决策、记忆、工具注册、Trace
+│   │   ├── crawler/        # 平台 crawler 和 worker
+│   │   ├── qa/             # RAG / LLM 问答
+│   │   ├── sentiment/      # 情感分析
+│   │   ├── services/       # 任务执行、报告、文本分析
+│   │   ├── schemas/        # Pydantic schema
+│   │   └── main.py         # FastAPI 入口
+│   └── run.py              # 后端启动入口
+├── frontend/
+│   ├── src/pages/          # Home / Task / Analysis / Agent / Settings
+│   ├── src/services/       # API 封装
+│   └── vite.config.ts
+├── AGENTS.md               # AI 编程助手协作规则
+└── README.md
 ```
 
 ## 快速开始
 
 ### 环境要求
-- Python `3.10+`
-- Node.js `18+`
-- MySQL `5.7+` 或本地 SQLite 调试环境
-- Redis `可选但推荐`
-- 可用的大模型 API Key，例如通义千问
 
-## 安装
+- Python 3.10+
+- Node.js 18+
+- MySQL 5.7+，也可以使用 SQLite 做本地调试
+- Redis 可选，默认可使用本地会话记忆
+- 可用的大模型 API Key，例如通义千问兼容 OpenAI 接口
 
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/meichungen/rag-llm-opinion-analysis-system.git
-cd rag-llm-opinion-analysis-system
-```
-
-### 2. 安装后端依赖
-
-使用 `pip`：
+### 安装后端依赖
 
 ```bash
 cd backend
@@ -160,14 +178,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-也可以使用 `uv`：
-
-```bash
-cd backend
-uv sync
-```
-
-### 3. 安装前端依赖
+### 安装前端依赖
 
 ```bash
 cd frontend
@@ -175,25 +186,22 @@ npm install
 ```
 
 ## 环境变量
+
 建议在 `backend` 目录下创建 `.env` 文件。
 
 ### MySQL 模式
 
 ```env
 DATABASE_URL=mysql+pymysql://root:your_password@localhost:3306/social_media_analysis
-
 DASHSCOPE_API_KEY=your_api_key
 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
-
 REDIS_URL=redis://localhost:6379/0
 ```
 
-### 本地调试模式
-如果你只是想快速本地跑通接口，不依赖 MySQL，可先使用 SQLite：
+### SQLite 本地调试
 
 ```env
 DATABASE_URL=sqlite+aiosqlite:///./local_dev.db
-
 DASHSCOPE_API_KEY=your_api_key
 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
@@ -202,23 +210,18 @@ DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 ### 后端
 
-Windows 下推荐使用 `run.py`，因为项目里有 Playwright 和异步事件循环兼容处理：
+Windows 下推荐使用 `run.py`：
 
 ```bash
 cd backend
 python run.py
 ```
 
-或者使用 `uv`：
-
-```bash
-cd backend
-uv run python run.py
-```
-
 默认后端地址：
 
-`http://127.0.0.1:8000`
+```text
+http://127.0.0.1:8000
+```
 
 ### 前端
 
@@ -227,35 +230,41 @@ cd frontend
 npm run dev
 ```
 
-Vite 默认前端地址通常为：
+默认前端地址通常为：
 
-`http://127.0.0.1:5173`
+```text
+http://127.0.0.1:5173
+```
 
-前端已在 [vite.config.ts] 中代理 `/api` 到 `http://127.0.0.1:8000`。
+前端通过 `frontend/vite.config.ts` 将 `/api` 代理到 `http://127.0.0.1:8000`。
 
 ## 推荐体验路径
 
-### 任务链路
-1. 进入“任务管理”创建任务
-2. 等待采集和分析完成
-3. 在“数据分析”页面查看情感分布、词云、LDA、任务风险摘要
-4. 导出 PDF 报告
+### 任务分析链路
+
+1. 进入“任务管理”创建采集任务。
+2. 等待采集和分析完成。
+3. 在“数据分析”页面查看情感分布、词云、LDA 和任务风险摘要。
+4. 导出分析报告。
 
 ### Agent 链路
-1. 进入“智能分析 Agent”
-2. 选择一个任务，或者直接提问
-3. 查看 Agent 的 `决策摘要 / 工具观察 / warnings / risk_fingerprints`
-4. 在左侧“平台风控面板”中查看本轮会话的聚合风险
 
-### 设置与运维
-1. 进入“系统设置 -> 平台配置”
-2. 查看平台 Cookie 健康状态
-3. 调整 crawler 参数
-4. 如有需要，点击“恢复默认 crawler 配置”
+1. 进入“智能分析 Agent”页面。
+2. 选择一个任务，或直接输入问题。
+3. 查看 Agent 的决策摘要、工具观察和执行轨迹。
+4. 在时间线中检查每一步工具调用、耗时、风险等级与观察结果。
+
+### 设置与诊断
+
+1. 进入“系统设置 -> 平台配置”。
+2. 查看平台 Cookie 健康状态。
+3. 调整 crawler 参数。
+4. 检查平台风险指纹和任务诊断结果。
 
 ## 常用接口
 
 ### 基础任务
+
 - `POST /api/tasks`
 - `GET /api/tasks`
 - `GET /api/tasks/{task_id}`
@@ -263,6 +272,7 @@ Vite 默认前端地址通常为：
 - `GET /api/tasks/{task_id}/report`
 
 ### 分析
+
 - `GET /api/analysis/sentiment/{task_id}`
 - `GET /api/analysis/wordcloud/{task_id}`
 - `GET /api/analysis/lda/{task_id}`
@@ -270,28 +280,54 @@ Vite 默认前端地址通常为：
 - `GET /api/analysis/report/{task_id}/pdf`
 
 ### Agent
+
 - `POST /api/agent/chat`
 
 ### 设置
+
 - `GET /api/settings`
 - `POST /api/settings`
 - `POST /api/settings/platform-cookie`
 - `GET /api/settings/platform-cookie/health`
 - `GET /api/settings/platform-crawler`
 
-## 已知说明
-- 首次运行 Playwright、模型依赖或 `uv` 临时环境时，下载时间可能较长。
-- 如果使用完整情感分析和向量检索链路，建议准备足够的磁盘和网络带宽。
-- 若本地只想验证接口和页面，可优先使用 SQLite，本地调试门槛更低。
+## 校验命令
 
-## 后续可继续完善
-- 增加更多平台接入，如小红书、知乎等
-- 增加更多风险指纹规则与告警面板
-- 为 Agent 增加更完整的执行链追踪
-- 做更细粒度的权限和多用户能力
-- 增加 Docker Compose 一键启动
+后端语法检查：
+
+```bash
+python -m compileall backend/app
+```
+
+Agent 聚焦测试：
+
+```bash
+cd backend
+pytest tests/test_agent_chat.py tests/test_agent_retriever.py tests/test_agent_indexer.py
+```
+
+前端类型与构建：
+
+```bash
+cd frontend
+npm run build
+```
+
+## 已知说明
+
+- 首次运行 Playwright、模型依赖或大模型相关能力时，可能需要较长下载或初始化时间。
+- 如只想快速验证接口和页面，可优先使用 SQLite，本地调试门槛更低。
+- 实时采集依赖平台 Cookie 与网络状态，建议先在设置页检查 Cookie 健康状态。
+- 默认 Agent 会优先分析已有任务数据；实时采集属于高风险工具，需要用户明确提出实时采集意图。
+
+## 后续规划
+
+- 增加更多平台接入，如小红书、知乎等。
+- 增加更多风险指纹规则和告警面板。
+- 扩展 Agent 行为评测集，覆盖工具选择准确率、参数修复和安全门控。
+- 增加更细粒度的权限和多用户能力。
+- 增加 Docker Compose 一键启动配置。
 
 ## 参与贡献
-欢迎通过 Issue 或 Pull Request 提出改进建议。
 
-如果这个项目对你有帮助，欢迎点个 Star。
+欢迎通过 Issue 或 Pull Request 提出改进建议。
