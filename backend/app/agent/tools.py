@@ -1,19 +1,76 @@
-from typing import Any, Awaitable, Callable, Dict, List
+from typing import Any, Awaitable, Callable, Dict, List, Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.crawler_tools import analyze_crawled_data, crawl_platform
 from app.agent.retriever import RagRetriever
-from app.agent.crawler_tools import crawl_platform, analyze_crawled_data
 from app.models.sql_models import AnalysisResult, Comment, Post, Task
 from app.sentiment.analyzer import SentimentAnalyzer
 from app.services.text_analysis import TextAnalysisService
 
 
-def tool(description: str) -> Callable:
+ToolRiskLevel = Literal["low", "medium", "high"]
+
+
+class SentimentAnalysisParams(BaseModel):
+    text: str = Field(..., min_length=1, description="需要分析情感的文本")
+
+
+class FetchDataParams(BaseModel):
+    keyword: str = Field(..., min_length=1, description="任务关键词")
+    platform: Literal["weibo", "douyin", "bilibili"] = Field(..., description="平台")
+
+
+class TopicModelingParams(FetchDataParams):
+    pass
+
+
+class VectorSearchParams(BaseModel):
+    query: str = Field(..., min_length=1, description="检索查询")
+    top_k: int = Field(default=3, ge=1, le=10, description="返回结果数")
+
+
+class CrawlDataParams(BaseModel):
+    platform: Literal["weibo", "douyin", "bilibili"] = Field(..., description="平台")
+    keyword: str = Field(..., min_length=1, description="采集关键词")
+    post_count: int = Field(default=10, ge=1, le=100, description="采集帖子数")
+    comment_count: int = Field(default=10, ge=1, le=500, description="采集评论数")
+
+
+class SummarizeCrawledDataParams(BaseModel):
+    data: Dict[str, Any] = Field(..., description="crawl_data 返回的数据")
+
+
+class ToolSpec(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str
+    description: str
+    parameters_model: type[BaseModel]
+    risk_level: ToolRiskLevel = "low"
+    requires_confirmation: bool = False
+    function: Callable[..., Awaitable[Dict[str, Any]]]
+
+    def parameters_schema(self) -> Dict[str, Any]:
+        return self.parameters_model.model_json_schema()
+
+
+def tool(
+    description: str,
+    *,
+    parameters_model: type[BaseModel],
+    risk_level: ToolRiskLevel = "low",
+    requires_confirmation: bool = False,
+) -> Callable:
     def decorator(func: Callable[..., Awaitable[Dict[str, Any]]]) -> Callable:
         func._is_tool = True
         func._description = description
+        func._parameters_model = parameters_model
+        func._parameters_schema = parameters_model.model_json_schema()
+        func._risk_level = risk_level
+        func._requires_confirmation = requires_confirmation
         return func
 
     return decorator
@@ -40,12 +97,24 @@ class AgentTools:
         return self._text_service
 
     def list_tools(self) -> Dict[str, Callable[..., Awaitable[Dict[str, Any]]]]:
-        tools: Dict[str, Callable[..., Awaitable[Dict[str, Any]]]] = {}
+        return {spec.name: spec.function for spec in self.list_tool_specs().values()}
+
+    def list_tool_specs(self) -> Dict[str, ToolSpec]:
+        specs: Dict[str, ToolSpec] = {}
         for name in dir(self):
             func = getattr(self.__class__, name, None)
-            if getattr(func, "_is_tool", False):
-                tools[name] = getattr(self, name)
-        return tools
+            if not getattr(func, "_is_tool", False):
+                continue
+            bound = getattr(self, name)
+            specs[name] = ToolSpec(
+                name=name,
+                description=getattr(func, "_description", ""),
+                parameters_model=getattr(func, "_parameters_model"),
+                risk_level=getattr(func, "_risk_level", "low"),
+                requires_confirmation=getattr(func, "_requires_confirmation", False),
+                function=bound,
+            )
+        return specs
 
     async def _load_task_texts(self, keyword: str, platform: str) -> List[str]:
         task_stmt = (
@@ -67,13 +136,17 @@ class AgentTools:
         return texts
 
     @tool(
-        "对单条文本做情感分析。参数: text(str)。返回: sentiment/confidence/probabilities。"
+        "对单条文本做情感分析，返回 sentiment、confidence 和 probabilities。",
+        parameters_model=SentimentAnalysisParams,
+        risk_level="low",
     )
     async def sentiment_analysis(self, text: str) -> Dict[str, Any]:
         return self.analyzer.predict(text)
 
     @tool(
-        "按关键词和平台查询已采集数据。参数: keyword(str), platform(str)。返回任务摘要与样本文本。"
+        "按关键词和平台查询已采集数据，返回任务摘要、情感分布和样本文本。",
+        parameters_model=FetchDataParams,
+        risk_level="low",
     )
     async def fetch_data(self, keyword: str, platform: str) -> Dict[str, Any]:
         stmt = (
@@ -107,7 +180,9 @@ class AgentTools:
         }
 
     @tool(
-        "按关键词和平台执行主题建模。参数: keyword(str), platform(str)。返回 LDA topics 列表。"
+        "按关键词和平台执行主题建模，返回 LDA topics 列表。",
+        parameters_model=TopicModelingParams,
+        risk_level="medium",
     )
     async def topic_modeling(self, keyword: str, platform: str) -> Dict[str, Any]:
         texts = await self._load_task_texts(keyword, platform)
@@ -117,15 +192,22 @@ class AgentTools:
         return {"keyword": keyword, "platform": platform, "topics": topics}
 
     @tool(
-        "轻量级长期记忆检索。参数: query(str), top_k(int=3)。返回最相关任务摘要和文本片段。"
+        "轻量级长期记忆检索，返回最相关任务摘要和文本片段。",
+        parameters_model=VectorSearchParams,
+        risk_level="low",
     )
     async def vector_search(self, query: str, top_k: int = 3) -> Dict[str, Any]:
         return await self._retriever.search(query=query, top_k=top_k)
 
     @tool(
-        "实时爬取社交媒体数据。参数: platform(str: bilibili/weibo/douyin), keyword(str), post_count(int=10), comment_count(int=10)。直接调用你的爬虫系统，返回帖子和评论数据。"
+        "实时采集社交媒体数据，直接调用爬虫系统，返回帖子和评论数据。",
+        parameters_model=CrawlDataParams,
+        risk_level="high",
+        requires_confirmation=True,
     )
-    async def crawl_data(self, platform: str, keyword: str, post_count: int = 10, comment_count: int = 10) -> Dict[str, Any]:
+    async def crawl_data(
+        self, platform: str, keyword: str, post_count: int = 10, comment_count: int = 10
+    ) -> Dict[str, Any]:
         return await crawl_platform(
             platform,
             keyword,
@@ -135,7 +217,9 @@ class AgentTools:
         )
 
     @tool(
-        "对已爬取的社交媒体数据进行预处理摘要。参数: data(dict)。分析爬取结果，提取样本数据用于后续分析。"
+        "对已采集的社交媒体数据进行预处理摘要，提取样本数据用于后续分析。",
+        parameters_model=SummarizeCrawledDataParams,
+        risk_level="low",
     )
     async def summarize_crawled_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
         return await analyze_crawled_data(data)

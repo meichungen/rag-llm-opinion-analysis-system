@@ -137,6 +137,7 @@ class AgentChatResponse(BaseModel):
     short_memory_turns: Optional[int] = None
     long_memory_hits: Optional[int] = None
     tool_observation: Optional[Dict[str, Any]] = None
+    agent_trace: Optional[List[Dict[str, Any]]] = None
 
 class HotTopicBase(BaseModel):
     source: str

@@ -12,6 +12,9 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local code intelligence indexes
+.gitnexus/
+
 # Frontend dependencies and build outputs
 node_modules/
 frontend/node_modules/
