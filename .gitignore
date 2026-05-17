@@ -1,38 +1,46 @@
-# 虚拟环境
+# Python virtual environments
 venv/
 env/
 ENV/
-.venv
+.venv/
 
-# Python 编译缓存
+# Python caches and test artifacts
 __pycache__/
 *.py[cod]
 *.so
+.pytest_cache/
+.coverage
+htmlcov/
 
-# 敏感信息与配置
+# Frontend dependencies and build outputs
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Sensitive local configuration
 .env
+.env.*
+!.env.example
 config.py
 secrets.py
 *.key
 *.pem
+backend/cookies_*.json
 
-# 日志文件
+# Logs and runtime outputs
 *.log
+output/
+reports/
+*.pdf
 
-# 数据库文件（如果你本地有测试用的 db）
+# Local databases
 *.db
 *.sqlite3
 
-# 操作系统生成文件
+# OS and IDE files
 .DS_Store
 Thumbs.db
-
-# IDE 配置（根据你的编辑器选择）
 .vscode/
 .idea/
 *.swp
-
-# 项目生成的文件（如果有）
-output/
-reports/
-*.pdf   # 如果不想上传 PDF 报告，可以取消注释
