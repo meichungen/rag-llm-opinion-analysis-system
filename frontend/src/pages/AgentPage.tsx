@@ -298,7 +298,7 @@ const AgentPage: React.FC = () => {
       const response = await api.post(
         endpoints.agent.chat,
         { query: content, session_id: sessionId },
-        { signal: controller.signal }
+        { signal: controller.signal, timeout: 10 * 60 * 1000 }
       );
 
       setMessages((prev) =>

@@ -70,6 +70,9 @@ DEFAULT_SETTINGS = {
         "milvus_uri": "",
         "milvus_token": "",
         "enable_tool_logging": True,
+        "llm_timeout_seconds": 60,
+        "answer_llm_timeout_seconds": 30,
+        "llm_max_retries": 0,
     },
     "platform": {
         "weibo": {

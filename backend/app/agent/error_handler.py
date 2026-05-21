@@ -48,7 +48,42 @@ class ErrorHandler:
         logger.error("LLM API call failed: %s", error, exc_info=True)
 
     @staticmethod
-    def get_fallback_answer(query: str, observation: Dict[str, Any]) -> str:
+    def get_fallback_answer(
+        query: str,
+        observation: Dict[str, Any],
+        generation_error: Optional[Exception] = None,
+    ) -> str:
+        if (
+            "success" in observation
+            and "total_posts" in observation
+            and "total_comments" in observation
+            and observation.get("status") in {"success", "partial_success", "failed"}
+        ):
+            platform = observation.get("platform") or "未知平台"
+            keyword = observation.get("keyword") or query
+            total_posts = observation.get("total_posts", 0)
+            total_comments = observation.get("total_comments", 0)
+            status_label = {
+                "success": "完成",
+                "partial_success": "部分完成",
+                "failed": "失败",
+            }.get(observation.get("status"), observation.get("status"))
+            lines = [
+                f"实时采集{status_label}：{platform} / {keyword}",
+                f"- 帖子：{total_posts} 条",
+                f"- 评论：{total_comments} 条",
+            ]
+            warnings = observation.get("warnings") or []
+            if warnings:
+                lines.append(f"- 告警：{len(warnings)} 条")
+                for warning in warnings[:3]:
+                    scope = warning.get("scope") or "runtime"
+                    message = warning.get("message") or warning
+                    lines.append(f"  - {scope}: {message}")
+            if generation_error:
+                lines.append("LLM 总结生成超时，已先返回本地采集摘要和结构化结果。")
+            return "\n".join(lines)
+
         error = observation.get("error")
         if error:
             return (
