@@ -59,17 +59,47 @@ class ErrorHandler:
         "如果",
         "进行",
         "需要",
+        "和",
+        "与",
+        "及",
+        "并",
+        "或",
+        "了",
+        "的",
+        "在",
+        "是",
+        "有",
+        "觉得",
+        "认为",
+        "出来",
+        "看到",
+        "知道",
+        "关键",
+        "明显",
+        "提升",
+        "受到",
+        "多款",
+        "一些",
+        "看清楚",
+        "很",
+        "才",
+        "也",
+        "要",
+        "都",
+        "又",
+        "还",
+        "再",
+        "更",
+        "时候",
+        "现在",
+        "今天",
+        "明天",
+        "昨天",
+        "哈哈",
+        "哈哈哈",
+        "啊啊",
+        "哈哈哈哈",
     }
-    _SUMMARY_THEME_DEFINITIONS = (
-        ("强降雨天气", ("暴雨", "大暴雨", "强降雨", "降雨", "大雨", "雨势", "雷暴", "预警", "山洪", "洪水")),
-        ("道路积水", ("积水", "内涝", "渍水", "淹水", "水位", "低洼", "排水", "路面积水")),
-        ("安全提醒", ("安全", "平安", "涉水", "绕行", "出行", "交通", "封路", "停运", "通行", "注意安全")),
-        ("救援处置", ("救援", "消防", "转移", "救助", "抢险", "救灾", "应急", "安置", "处置")),
-        ("学生出行", ("学生", "学校", "上学", "放学", "停课", "校车", "孩子", "儿童", "老师")),
-        ("城市防汛", ("防汛", "市政", "城管", "部门", "治理", "预案", "排涝", "排水")),
-        ("责任追问", ("严惩", "追责", "问责", "责任", "调查", "处罚", "失职")),
-        ("民生保障", ("停电", "供水", "物资", "受灾", "群众", "居民", "生活", "家里")),
-    )
 
     @staticmethod
     def build_error_response(
@@ -180,22 +210,22 @@ class ErrorHandler:
 
         total_posts = observation.get("total_posts", len(posts))
         total_comments = observation.get("total_comments", len(comments))
-        post_themes = ErrorHandler._theme_labels(posts, 3)
-        comment_themes = ErrorHandler._theme_labels(comments, 4)
-        post_terms = ErrorHandler._top_terms(posts, keyword, 3) if not post_themes else []
-        comment_terms = ErrorHandler._top_terms(comments, keyword, 4) if not comment_themes else []
+        post_terms = ErrorHandler._key_phrases(posts, keyword, 3)
+        comment_terms = ErrorHandler._key_phrases(comments, keyword, 4)
+        post_clause = ErrorHandler._representative_clause(posts, post_terms, keyword)
+        comment_clause = ErrorHandler._representative_clause(comments, comment_terms, keyword)
 
         parts = [f"采集到{total_posts}帖{total_comments}评"]
         if keyword:
             parts.append(f"围绕{keyword}")
-        if post_themes:
-            parts.append(f"内容集中在{'、'.join(post_themes)}")
-        elif post_terms:
-            parts.append(f"内容提及{'、'.join(post_terms)}")
-        if comment_themes:
-            parts.append(f"评论主要关注{'、'.join(comment_themes)}")
-        elif comment_terms:
-            parts.append(f"评论热词包括{'、'.join(comment_terms)}")
+        if post_terms:
+            parts.append(f"帖子内容提到{'、'.join(post_terms)}")
+        elif post_clause:
+            parts.append(f"帖子内容提到{post_clause}")
+        if comment_terms:
+            parts.append(f"评论主要讨论{'、'.join(comment_terms)}")
+        elif comment_clause:
+            parts.append(f"评论主要讨论{comment_clause}")
 
         if len(parts) <= 2:
             snippet = ErrorHandler._best_snippet(posts + comments, keyword)
@@ -205,18 +235,100 @@ class ErrorHandler:
         return ErrorHandler._fit_limit("，".join(parts) + "。", limit)
 
     @staticmethod
-    def _theme_labels(texts: List[str], limit: int) -> List[str]:
+    def _key_phrases(texts: List[str], keyword: str, limit: int) -> List[str]:
+        keyword_parts = set(ErrorHandler._tokenize(keyword)) | {keyword}
         scores: Counter[str] = Counter()
+
+        try:
+            import jieba.analyse
+
+            tags = jieba.analyse.extract_tags(
+                "。".join(texts),
+                topK=max(limit * 4, 12),
+                withWeight=True,
+                allowPOS=("n", "nr", "ns", "nt", "nz", "vn", "v", "a"),
+            )
+            for tag, weight in tags:
+                phrase = ErrorHandler._normalize_phrase(tag)
+                if ErrorHandler._is_good_phrase(phrase, keyword_parts):
+                    scores[phrase] += max(1, int(weight * 2))
+        except Exception:
+            pass
+
         for text in texts:
-            matched_in_text = set()
-            for label, keywords in ErrorHandler._SUMMARY_THEME_DEFINITIONS:
-                score = sum(text.count(keyword) for keyword in keywords if keyword in text)
-                if score > 0:
-                    scores[label] += score
-                    matched_in_text.add(label)
-            for label in matched_in_text:
-                scores[label] += 1
-        return [label for label, _ in scores.most_common(limit)]
+            raw_tokens = ErrorHandler._raw_tokens(text)
+            tokens = [
+                token
+                for token in raw_tokens
+                if ErrorHandler._is_good_phrase(token, keyword_parts)
+            ]
+            for token in tokens:
+                scores[token] += 1
+            for first, second in zip(raw_tokens, raw_tokens[1:]):
+                if first in ErrorHandler._SUMMARY_STOP_WORDS or second in ErrorHandler._SUMMARY_STOP_WORDS:
+                    continue
+                phrase = ErrorHandler._normalize_phrase(first + second)
+                if ErrorHandler._is_good_phrase(phrase, keyword_parts, allow_longer=True):
+                    scores[phrase] += 4
+
+        selected: List[str] = []
+        for phrase, _ in sorted(scores.items(), key=lambda item: (-item[1], -len(item[0]), item[0])):
+            if any(phrase in existing or existing in phrase for existing in selected):
+                continue
+            selected.append(phrase)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    @staticmethod
+    def _representative_clause(texts: List[str], phrases: List[str], keyword: str) -> str:
+        candidates: List[str] = []
+        for text in texts:
+            for clause in re.split(r"[。！？!?；;，,\n]", text):
+                clause = ErrorHandler._clean_text(clause)
+                if 4 <= len(clause) <= 36:
+                    candidates.append(clause)
+        if not candidates:
+            return ""
+
+        keyword_parts = set(ErrorHandler._tokenize(keyword)) | {keyword}
+
+        def score_clause(clause: str) -> tuple[int, int]:
+            phrase_hits = sum(1 for phrase in phrases if phrase and phrase in clause)
+            keyword_hits = sum(1 for part in keyword_parts if part and part in clause)
+            return (phrase_hits * 3 + keyword_hits, -len(clause))
+
+        best = max(candidates, key=score_clause)
+        return ErrorHandler._fit_limit(best, 36).rstrip("。")
+
+    @staticmethod
+    def _normalize_phrase(phrase: str) -> str:
+        phrase = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(phrase or "").strip())
+        return phrase
+
+    @staticmethod
+    def _is_good_phrase(
+        phrase: str,
+        keyword_parts: set[str],
+        *,
+        allow_longer: bool = False,
+    ) -> bool:
+        if not phrase:
+            return False
+        max_length = 12 if allow_longer else 8
+        if len(phrase) < 2 or len(phrase) > max_length:
+            return False
+        if phrase.isdigit() or phrase in ErrorHandler._SUMMARY_STOP_WORDS:
+            return False
+        if phrase in keyword_parts:
+            return False
+        if any(part and phrase == part for part in keyword_parts):
+            return False
+        if phrase[0] in "和与及并或的了在是有" or phrase[-1] in "和与及并或的了在是有":
+            return False
+        if re.fullmatch(r"[A-Za-z0-9]+", phrase) and len(phrase) < 3:
+            return False
+        return True
 
     @staticmethod
     def _extract_char_limit(query: str, default: int) -> int:
@@ -252,23 +364,11 @@ class ErrorHandler:
         return text.strip()
 
     @staticmethod
-    def _top_terms(texts: List[str], keyword: str, limit: int) -> List[str]:
-        tokens: List[str] = []
-        for text in texts:
-            tokens.extend(ErrorHandler._tokenize(text))
-        keyword_parts = set(ErrorHandler._tokenize(keyword)) | {keyword}
-        counter = Counter(
-            token
-            for token in tokens
-            if token
-            and token not in ErrorHandler._SUMMARY_STOP_WORDS
-            and token not in keyword_parts
-            and not token.isdigit()
-        )
-        return [token for token, _ in counter.most_common(limit)]
+    def _tokenize(text: str) -> List[str]:
+        return [token for token in ErrorHandler._raw_tokens(text) if 2 <= len(token) <= 8]
 
     @staticmethod
-    def _tokenize(text: str) -> List[str]:
+    def _raw_tokens(text: str) -> List[str]:
         try:
             import jieba
 
@@ -278,7 +378,7 @@ class ErrorHandler:
         tokens = []
         for token in raw_tokens:
             token = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(token).strip())
-            if 2 <= len(token) <= 8:
+            if 1 <= len(token) <= 8:
                 tokens.append(token)
         return tokens
 

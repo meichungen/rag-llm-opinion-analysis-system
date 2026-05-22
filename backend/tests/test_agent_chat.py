@@ -7,6 +7,7 @@ from sqlalchemy import delete
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_task.db"
 
 from app.agent.agent import OpinionAgent
+from app.agent.error_handler import ErrorHandler
 from app.agent.tool_manager import ToolManager
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.main import app
@@ -217,10 +218,10 @@ def test_agent_chat_direct_crawl_summary_keeps_clean_keyword(monkeypatch):
         assert payload["used_tool"] == "crawl_data"
         assert len(payload["answer"]) <= 100
         assert "湖北暴雨" in payload["answer"]
-        assert "内容集中在" in payload["answer"]
-        assert "评论主要关注" in payload["answer"]
-        assert "道路积水" in payload["answer"]
-        assert "安全提醒" in payload["answer"]
+        assert "帖子内容提到" in payload["answer"]
+        assert "评论主要讨论" in payload["answer"]
+        assert any(term in payload["answer"] for term in ("道路积水", "积水", "救援"))
+        assert any(term in payload["answer"] for term in ("注意安全", "安全", "绕行", "责任"))
         assert "实时采集完成" not in payload["answer"]
         assert "这种" not in payload["answer"]
         assert "感谢" not in payload["answer"]
@@ -235,6 +236,38 @@ def test_agent_chat_direct_crawl_summary_keeps_clean_keyword(monkeypatch):
         }
 
     asyncio.run(_run())
+
+
+def test_crawl_content_summary_is_keyword_agnostic():
+    query = "B站搜索新能源车，5条视频，总计30条评论，概括帖子和评论内容，不超过100字，需实时抓取最新数据"
+    observation = {
+        "success": True,
+        "status": "success",
+        "platform": "bilibili",
+        "keyword": "新能源车",
+        "posts": [
+            {"content": "新能源车实测续航里程和高速能耗表现，重点比较充电效率"},
+            {"content": "多款车型智能驾驶辅助体验，车机系统和空间表现受到关注"},
+        ],
+        "comments": [
+            {"content": "价格补贴很关键，续航稳定才敢买"},
+            {"content": "售后服务和电池保修也要看清楚"},
+            {"content": "充电效率提升明显，长途出行压力小一些"},
+        ],
+        "total_posts": 5,
+        "total_comments": 30,
+    }
+
+    answer = ErrorHandler.get_fallback_answer(query, observation)
+
+    assert len(answer) <= 100
+    assert "新能源车" in answer
+    assert "帖子内容提到" in answer
+    assert "评论主要讨论" in answer
+    assert any(term in answer for term in ("续航", "充电", "智能驾驶", "车机"))
+    assert any(term in answer for term in ("价格", "售后", "电池", "补贴"))
+    assert "强降雨" not in answer
+    assert "道路积水" not in answer
 
 
 def test_agent_chat_answer_generation_timeout_keeps_tool_result(monkeypatch):
