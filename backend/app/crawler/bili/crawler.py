@@ -264,7 +264,7 @@ class BilibiliCrawler:
                 break
 
         logger.info(f"Finished getting comments for video {post_id}: total {len(all_comments)} comments from {page_count} pages")
-        return all_comments
+        return all_comments[:count]
 
     async def get_video_comments_by_mode(
         self,

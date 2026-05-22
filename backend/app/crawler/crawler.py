@@ -11,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 # Database imports
 from app.core.settings import get_cookie_file_candidates, get_platform_crawler_config
+from sqlalchemy import func
 from sqlalchemy.future import select
 from app.core.database import AsyncSessionLocal
 from app.models.sql_models import Post, Comment, Task
@@ -89,6 +90,8 @@ class SocialMediaCrawler:
         
         if platform not in self.platforms:
             raise ValueError(f"Unsupported platform: {platform}")
+        post_limit = self._normalize_limit(post_count)
+        comment_limit = self._normalize_limit(comment_count)
         
         crawler_class = self.platforms[platform]
         crawler = crawler_class(self.browser, get_platform_crawler_config(platform, self.platform_settings))
@@ -130,59 +133,58 @@ class SocialMediaCrawler:
                 reraise=True
             )
             async def fetch_posts():
-                return await crawler.search_posts(keyword, post_count)
+                return await crawler.search_posts(keyword, post_limit)
 
-            posts = await fetch_posts()
+            posts = self._limit_records(await fetch_posts(), post_limit)
             logger.info(f"Found {len(posts)} posts")
             await self._update_task_progress(task_id, 20.0, f"已找到 {len(posts)} 条帖子，准备保存...")
             
             # 保存帖子数据 (Async)
             await self.save_posts(posts, task_id, platform)
             
-            # 爬取评论 - 提高并发度
             all_comments = []
-            max_concurrent = 10 # 提高并发
-            sem = asyncio.Semaphore(max_concurrent) 
             
-            async def fetch_comments_safe(post, index):
-                async with sem:
-                    try:
-                        post_id = post['id']
-                        # 随机延迟避免被封
-                        await asyncio.sleep(random.uniform(0.5, 2.0))
-                        
-                        # 评论抓取也增加重试
-                        @retry(
-                            stop=stop_after_attempt(2),
-                            wait=wait_exponential(multiplier=1, min=1, max=5),
-                            retry=retry_if_exception_type((TimeoutError, PlaywrightError)),
-                            reraise=False
-                        )
-                        async def get_comments_with_retry():
-                            return await crawler.get_comments(post_id, comment_count)
+            async def fetch_comments_safe(post, index, remaining_count):
+                try:
+                    post_id = post['id']
+                    # 随机延迟避免被封
+                    await asyncio.sleep(random.uniform(0.5, 2.0))
 
-                        comments = await get_comments_with_retry()
-                        if not comments:
-                            return []
-                            
-                        for comment in comments:
-                            comment['post_id'] = post_id
-                        
-                        # 实时汇报进度
-                        if index % 5 == 0:
-                            progress = 30.0 + (index / len(posts)) * 40.0
-                            await self._update_task_progress(task_id, progress, f"正在抓取评论: {index}/{len(posts)}...")
-                            
-                        return comments
-                    except Exception as e:
-                        logger.error(f"Error fetching comments for post {post.get('id')}: {e}")
+                    # 评论抓取也增加重试
+                    @retry(
+                        stop=stop_after_attempt(2),
+                        wait=wait_exponential(multiplier=1, min=1, max=5),
+                        retry=retry_if_exception_type((TimeoutError, PlaywrightError)),
+                        reraise=False
+                    )
+                    async def get_comments_with_retry():
+                        return await crawler.get_comments(post_id, remaining_count)
+
+                    comments = self._limit_records(await get_comments_with_retry(), remaining_count)
+                    if not comments:
                         return []
 
-            tasks = [fetch_comments_safe(post, i) for i, post in enumerate(posts)]
-            results = await asyncio.gather(*tasks)
-            
-            for comments in results:
-                all_comments.extend(comments)
+                    for comment in comments:
+                        comment['post_id'] = post_id
+
+                    progress = 30.0 + (index / max(len(posts), 1)) * 40.0
+                    await self._update_task_progress(
+                        task_id,
+                        progress,
+                        f"正在抓取评论: {len(all_comments) + len(comments)}/{comment_limit}..."
+                    )
+
+                    return comments
+                except Exception as e:
+                    logger.error(f"Error fetching comments for post {post.get('id')}: {e}")
+                    return []
+
+            for index, post in enumerate(posts, start=1):
+                remaining_count = comment_limit - len(all_comments)
+                if remaining_count <= 0:
+                    break
+                comments = await fetch_comments_safe(post, index, remaining_count)
+                all_comments.extend(self._limit_records(comments, remaining_count))
             
             logger.info(f"Found {len(all_comments)} comments")
             await self._update_task_progress(task_id, 80.0, f"抓取完成，共 {len(all_comments)} 条评论，正在保存...")
@@ -205,6 +207,17 @@ class SocialMediaCrawler:
         finally:
             if hasattr(crawler, 'context') and crawler.context:
                 await crawler.context.close()
+
+    def _normalize_limit(self, value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
+    def _limit_records(self, records: Optional[List[Dict]], limit: int) -> List[Dict]:
+        if limit <= 0 or not records:
+            return []
+        return list(records)[:limit]
 
     async def _update_task_progress(self, task_id: Optional[int], progress: Optional[float], 
                                    message: str, status: str = None):
@@ -336,6 +349,13 @@ class SocialMediaCrawler:
                 res_task = await session.execute(stmt_task)
                 task = res_task.scalars().first()
                 if task:
+                    post_limit = self._normalize_limit(task.post_count)
+                    await self._trim_task_posts(session, task_id, post_limit)
+                    existing_count_res = await session.execute(
+                        select(func.count(Post.id)).filter(Post.task_id == task_id)
+                    )
+                    existing_count = existing_count_res.scalar() or 0
+                    posts = self._limit_records(posts, max(0, post_limit - existing_count))
                     task.progress = 30.0
                     task.progress_message = f"正在保存 {len(posts)} 条帖子..."
                     # Don't commit yet, will commit with posts
@@ -383,6 +403,13 @@ class SocialMediaCrawler:
                 res_task = await session.execute(stmt_task)
                 task = res_task.scalars().first()
                 if task:
+                    comment_limit = self._normalize_limit(task.comment_count)
+                    await self._trim_task_comments(session, task_id, comment_limit)
+                    existing_count_res = await session.execute(
+                        select(func.count(Comment.id)).join(Post).filter(Post.task_id == task_id)
+                    )
+                    existing_count = existing_count_res.scalar() or 0
+                    comments = self._limit_records(comments, max(0, comment_limit - existing_count))
                     task.progress = 50.0
                     task.progress_message = f"正在保存 {len(comments)} 条评论..."
                     
@@ -421,6 +448,24 @@ class SocialMediaCrawler:
             except Exception as e:
                 await session.rollback()
                 logger.error(f"Failed to save comments: {str(e)}")
+
+    async def _trim_task_posts(self, session, task_id: int, post_limit: int) -> None:
+        posts = (
+            await session.execute(
+                select(Post).filter(Post.task_id == task_id).order_by(Post.id)
+            )
+        ).scalars().all()
+        for post in posts[post_limit:]:
+            await session.delete(post)
+
+    async def _trim_task_comments(self, session, task_id: int, comment_limit: int) -> None:
+        comments = (
+            await session.execute(
+                select(Comment).join(Post).filter(Post.task_id == task_id).order_by(Comment.id)
+            )
+        ).scalars().all()
+        for comment in comments[comment_limit:]:
+            await session.delete(comment)
 
     def _parse_time(self, time_str):
         """Simple time parser"""

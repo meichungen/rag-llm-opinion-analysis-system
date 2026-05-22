@@ -190,7 +190,7 @@ class WeiboCrawler:
             except Exception as e:
                 logger.warning(f"Failed to parse comment: {e}")
                 
-        return parsed_comments
+        return parsed_comments[:count]
 
     def _parse_comment(self, comment: Dict, post_id: str) -> Optional[Dict]:
         try:

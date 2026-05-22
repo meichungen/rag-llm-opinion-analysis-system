@@ -554,7 +554,7 @@ const HomePage: React.FC = () => {
               <Col span={12}>
                 <Form.Item
                   name="post_count"
-                  label="采集帖子数"
+                  label="目标帖子数"
                   initialValue={100}
                 >
                   <InputNumber min={1} max={1000} style={{ width: '100%' }} />
@@ -563,10 +563,10 @@ const HomePage: React.FC = () => {
               <Col span={12}>
                 <Form.Item
                   name="comment_count"
-                  label="每贴评论数"
+                  label="目标评论总数"
                   initialValue={1000}
                 >
-                  <InputNumber min={1} max={5000} style={{ width: '100%' }} />
+                  <InputNumber min={1} max={10000} style={{ width: '100%' }} />
                 </Form.Item>
               </Col>
             </Row>

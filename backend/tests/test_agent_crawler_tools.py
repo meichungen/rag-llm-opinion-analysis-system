@@ -130,16 +130,75 @@ def test_crawl_platform_respects_requested_post_count(monkeypatch):
         assert result["status"] == "partial_success"
         assert len(result["posts"]) == 3
         assert result["diagnostics"]["processed_posts"] == 3
-        assert result["diagnostics"]["comments_per_post"] == 4
         assert len(result["comments"]) == 3
 
     asyncio.run(_run())
 
     assert fake_crawler_instances[0].comment_calls == [
-        ("post-1", 4),
-        ("post-2", 4),
-        ("post-3", 4),
+        ("post-1", 12),
+        ("post-2", 11),
+        ("post-3", 10),
     ]
+
+
+def test_crawl_platform_trims_comments_to_requested_total(monkeypatch):
+    class FakePage:
+        async def close(self):
+            return None
+
+    class FakeContext:
+        async def new_page(self):
+            return FakePage()
+
+    class FakeCrawler:
+        def __init__(self, browser, config=None):
+            self.browser = browser
+            self.config = config or {}
+            self.context = None
+            self.page = None
+            self.comment_calls = []
+
+        async def init_client(self):
+            return None
+
+        async def search_posts(self, keyword, count):
+            return [{"id": f"post-{idx}", "content": keyword} for idx in range(1, 4)]
+
+        async def get_comments(self, post_id, count):
+            self.comment_calls.append((post_id, count))
+            return [
+                {"id": f"{post_id}-comment-{idx}", "content": "ok"}
+                for idx in range(count + 5)
+            ]
+
+    fake_crawler_instances = []
+
+    def fake_crawler_factory(browser, config=None):
+        crawler = FakeCrawler(browser, config)
+        fake_crawler_instances.append(crawler)
+        return crawler
+
+    async def fake_ensure_browser():
+        return object()
+
+    async def fake_ensure_context(platform):
+        return FakeContext()
+
+    monkeypatch.setattr(crawler_tools_module, "DouyinCrawler", fake_crawler_factory)
+    monkeypatch.setattr(AgentCrawlerTool, "ensure_browser", fake_ensure_browser)
+    monkeypatch.setattr(AgentCrawlerTool, "ensure_context", fake_ensure_context)
+    monkeypatch.setattr(crawler_tools_module, "read_cookie_metadata", lambda platform: {"health": "healthy", "issues": []})
+
+    async def _run():
+        result = await crawl_platform("douyin", "原神", post_count=3, comment_count=10)
+        assert result["success"] is True
+        assert len(result["posts"]) == 3
+        assert len(result["comments"]) == 10
+        assert result["total_comments"] == 10
+
+    asyncio.run(_run())
+
+    assert fake_crawler_instances[0].comment_calls == [("post-1", 10)]
 
 
 def test_crawl_platform_collects_cookie_warning(monkeypatch):

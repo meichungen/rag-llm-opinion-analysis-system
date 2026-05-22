@@ -582,7 +582,7 @@ class OpinionAgent:
             "fallback": "direct_answer",
             "message": (
                 "我已收到爬虫调用许可，但还缺少采集对象。请在同一句里说明平台、关键词和数量，"
-                "例如：实时采集抖音关于“首届南北早餐争霸赛”的前10个帖子及每条100条评论。"
+                "例如：实时采集抖音关于“首届南北早餐争霸赛”的前10个帖子及共100条评论。"
             ),
         }
 
@@ -608,12 +608,25 @@ class OpinionAgent:
         if quoted:
             return quoted.group(1).strip()
 
+        segment = self._extract_keyword_segment(query)
+        if segment:
+            text = segment
+
         for aliases in _PLATFORM_ALIASES.values():
             for alias in aliases:
                 text = re.sub(re.escape(alias), " ", text, flags=re.IGNORECASE)
 
+        text = re.split(
+            r"(?:的)?(?:前|最新)?\s*\d+\s*(?:个|条)?\s*(?:帖子|评论|视频|作品)"
+            r"|(?:共|总共|总计|合计)\s*\d+\s*(?:条)?\s*评论"
+            r"|(?:将|请|帮我|给我|输出|总结|汇总|概括|摘要|不超过|需|需要|最新)",
+            text,
+            maxsplit=1,
+        )[0]
         text = re.sub(r"(前|最新)\s*\d+\s*(个|条)?\s*(帖子|评论|视频|作品)?", " ", text)
-        text = re.sub(r"(每条|每个|每篇|每则)?\s*\d+\s*(条)?\s*评论", " ", text)
+        text = re.sub(r"\d+\s*(个|条)?\s*(帖子|评论|视频|作品)", " ", text)
+        text = re.sub(r"\d+\s*字", " ", text)
+        text = re.sub(r"(共|总共|总计|合计|每条|每个|每篇|每则)?\s*\d+\s*(条)?\s*评论", " ", text)
         stop_words = [
             "用户",
             "明确",
@@ -629,6 +642,10 @@ class OpinionAgent:
             "抓取",
             "爬取",
             "获取",
+            "搜索",
+            "搜",
+            "检索",
+            "查询",
             "调用",
             "启动",
             "运行",
@@ -638,8 +655,23 @@ class OpinionAgent:
             "帖子",
             "评论",
             "数据",
+            "内容",
+            "总结",
+            "汇总",
+            "概括",
+            "摘要",
+            "输出",
+            "超过",
+            "不超过",
+            "总计",
+            "总共",
+            "合计",
+            "最新",
             "关于",
             "平台",
+            "将",
+            "给我",
+            "需",
             "及",
             "和",
             "的",
@@ -650,14 +682,33 @@ class OpinionAgent:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
+    def _extract_keyword_segment(self, query: str) -> str:
+        aliases = sorted(
+            {alias for group in _PLATFORM_ALIASES.values() for alias in group},
+            key=len,
+            reverse=True,
+        )
+        platform_pattern = "|".join(re.escape(alias) for alias in aliases)
+        separators = r"，。！？；;,.!?\n"
+        patterns = [
+            rf"(?:{platform_pattern})\s*(?:搜索|搜|检索|查询|查找|关于|话题)?\s*([^{separators}]{{2,80}})",
+            rf"(?:搜索|搜|检索|查询|查找|关于|话题)\s*([^{separators}]{{2,80}})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, query, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return ""
+
     def _infer_count_from_query(self, query: str, name: str, default: int) -> int:
         patterns = {
             "post_count": [
+                r"(\d+)\s*(?:个|条)?\s*(?:帖子|视频|作品)",
                 r"(?:前|最新)\s*(\d+)\s*(?:个|条)?\s*(?:帖子|视频|作品)",
                 r"(?:帖子|视频|作品)\s*(\d+)\s*(?:个|条)?",
             ],
             "comment_count": [
-                r"(?:每条|每个|每篇|每则)?\s*(\d+)\s*(?:条)?\s*评论",
+                r"(?:共|总共|总计|合计|每条|每个|每篇|每则)?\s*(\d+)\s*(?:条)?\s*评论",
                 r"评论\s*(\d+)\s*(?:条)?",
             ],
         }

@@ -170,7 +170,7 @@ class DouyinCrawler:
             parsed = self._parse_comment(comment, post_id)
             if parsed:
                 parsed_comments.append(parsed)
-        return parsed_comments
+        return parsed_comments[:count]
 
     def _parse_comment(self, comment: Dict, post_id: str) -> Optional[Dict]:
         try:

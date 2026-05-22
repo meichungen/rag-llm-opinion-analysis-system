@@ -35,8 +35,8 @@ class VectorSearchParams(BaseModel):
 class CrawlDataParams(BaseModel):
     platform: Literal["weibo", "douyin", "bilibili"] = Field(..., description="平台")
     keyword: str = Field(..., min_length=1, description="采集关键词")
-    post_count: int = Field(default=10, ge=1, le=100, description="采集帖子数")
-    comment_count: int = Field(default=10, ge=1, le=500, description="采集评论数")
+    post_count: int = Field(default=10, ge=1, le=100, description="目标采集帖子数")
+    comment_count: int = Field(default=10, ge=1, le=500, description="目标采集评论总数")
 
 
 class SummarizeCrawledDataParams(BaseModel):

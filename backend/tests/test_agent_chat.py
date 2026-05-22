@@ -143,7 +143,7 @@ def test_agent_chat_direct_crawl_without_llm(monkeypatch):
             response = await client.post(
                 "/api/agent/chat",
                 json={
-                    "query": "实时采集抖音关于“首届南北早餐争霸赛”的前10个帖子及每条100条评论",
+                    "query": "实时采集抖音关于“首届南北早餐争霸赛”的前10个帖子及共100条评论",
                     "session_id": "s-direct-crawl",
                 },
             )
@@ -158,6 +158,77 @@ def test_agent_chat_direct_crawl_without_llm(monkeypatch):
             "params": {
                 "platform": "douyin",
                 "keyword": "首届南北早餐争霸赛",
+                "post_count": 10,
+                "comment_count": 100,
+            },
+        }
+
+    asyncio.run(_run())
+
+
+def test_agent_chat_direct_crawl_summary_keeps_clean_keyword(monkeypatch):
+    recorded = {}
+
+    async def fail_chat(self, prompt: str, temperature: float, **kwargs) -> str:
+        raise AssertionError("实时采集后的短摘要应使用本地摘要，不应额外调用 LLM")
+
+    async def fake_tool(self, action, params, session_id):
+        self.used_tool = action
+        recorded["action"] = action
+        recorded["params"] = params
+        return {
+            "success": True,
+            "status": "success",
+            "platform": params["platform"],
+            "keyword": params["keyword"],
+            "posts": [
+                {"content": "湖北暴雨导致多地道路积水，消防救援转移群众"},
+                {"content": "湖北多部门提醒强降雨期间注意出行安全"},
+            ],
+            "comments": [
+                {"content": "这种天气真的要注意安全，积水路段不要涉水"},
+                {"content": "感谢救援人员，希望救援顺利，大家减少外出"},
+                {"content": "道路积水严重，出行要绕行，也要调查责任"},
+            ],
+            "total_posts": params["post_count"],
+            "total_comments": params["comment_count"],
+            "warnings": [],
+            "diagnostics": {"risk_fingerprints": []},
+            "message": "抓取完成",
+            "_tool_meta": {"name": action, "elapsed_ms": 12, "risk_level": "high"},
+        }
+
+    monkeypatch.setattr(OpinionAgent, "_chat", fail_chat)
+    monkeypatch.setattr(ToolManager, "call_tool", fake_tool)
+
+    async def _run():
+        await reset_agent_tables()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/agent/chat",
+                json={
+                    "query": "抖音搜索湖北暴雨，10条帖子，总计100条评论，将帖子和评论的内容总结给我，输出不超过100字，需实时抓取最新数据",
+                    "session_id": "s-direct-crawl-summary",
+                },
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["used_tool"] == "crawl_data"
+        assert len(payload["answer"]) <= 100
+        assert "湖北暴雨" in payload["answer"]
+        assert "内容集中在" in payload["answer"]
+        assert "评论主要关注" in payload["answer"]
+        assert "道路积水" in payload["answer"]
+        assert "安全提醒" in payload["answer"]
+        assert "实时采集完成" not in payload["answer"]
+        assert "这种" not in payload["answer"]
+        assert "感谢" not in payload["answer"]
+        assert recorded == {
+            "action": "crawl_data",
+            "params": {
+                "platform": "douyin",
+                "keyword": "湖北暴雨",
                 "post_count": 10,
                 "comment_count": 100,
             },

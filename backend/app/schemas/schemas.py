@@ -5,8 +5,8 @@ from datetime import datetime
 class TaskBase(BaseModel):
     platform: Literal["weibo", "douyin", "bilibili"]
     keyword: str
-    post_count: int = Field(default=100, ge=1, le=1000)
-    comment_count: int = Field(default=1000, ge=1, le=10000)
+    post_count: int = Field(default=100, ge=1, le=1000, description="目标采集帖子数")
+    comment_count: int = Field(default=1000, ge=1, le=10000, description="目标采集评论总数")
 
 class TaskCreate(TaskBase):
     user_id: Optional[int] = 1

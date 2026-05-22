@@ -55,14 +55,12 @@ const TaskManagementPage: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [form] = Form.useForm();
 
   // 获取任务列表
   const fetchTasks = async () => {
     try {
-      setLoading(true);
       const response = await api.get(endpoints.tasks);
       if (response.data && response.data.tasks) {
         setTasks(response.data.tasks);
@@ -70,8 +68,6 @@ const TaskManagementPage: React.FC = () => {
     } catch (error) {
       console.error('获取任务列表失败:', error);
       message.error('获取任务列表失败');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -171,13 +167,13 @@ const TaskManagementPage: React.FC = () => {
       render: (text: string) => <Text strong>{text}</Text>
     },
     {
-      title: '帖子数',
+      title: '目标帖子数',
       dataIndex: 'post_count',
       key: 'post_count',
       render: (count: number) => count?.toLocaleString() || '-'
     },
     {
-      title: '评论数',
+      title: '目标评论总数',
       dataIndex: 'comment_count',
       key: 'comment_count',
       render: (count: number) => count?.toLocaleString() || '-'
@@ -366,7 +362,6 @@ const TaskManagementPage: React.FC = () => {
         <Button
           icon={<ReloadOutlined />}
           onClick={fetchTasks}
-          loading={loading}
         >
           刷新
         </Button>
@@ -378,7 +373,6 @@ const TaskManagementPage: React.FC = () => {
           columns={columns}
           dataSource={tasks}
           rowKey="id"
-          loading={loading}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -429,21 +423,21 @@ const TaskManagementPage: React.FC = () => {
             <Col span={12}>
               <Form.Item
                 name="post_count"
-                label="帖子数量"
+                label="目标帖子数"
                 initialValue={100}
-                rules={[{ required: true, message: '请输入帖子数量' }]}
+                rules={[{ required: true, message: '请输入目标帖子数' }]}
               >
-                <InputNumber min={10} max={1000} style={{ width: '100%' }} />
+                <InputNumber min={1} max={1000} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
                 name="comment_count"
-                label="评论数量"
+                label="目标评论总数"
                 initialValue={1000}
-                rules={[{ required: true, message: '请输入评论数量' }]}
+                rules={[{ required: true, message: '请输入目标评论总数' }]}
               >
-                <InputNumber min={100} max={10000} style={{ width: '100%' }} />
+                <InputNumber min={1} max={10000} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>

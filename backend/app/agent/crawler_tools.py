@@ -344,6 +344,7 @@ async def crawl_platform(
             
             logger.info(f"Searching {platform} for: {keyword}")
             posts = await crawler.search_posts(keyword, post_count)
+            posts = posts[:post_count]
             diagnostics["available_posts"] = len(posts)
             
             if not posts:
@@ -362,17 +363,18 @@ async def crawl_platform(
             comments = []
             
             posts_to_process = posts[:max(1, min(post_count, len(posts)))]
-            comments_per_post = 0
-            if posts_to_process and comment_count > 0:
-                comments_per_post = min((comment_count + len(posts_to_process) - 1) // len(posts_to_process), 50)
+            comment_request_cap = int(crawler_config.get("max_comments_per_post_request", 50))
             
             for post in posts_to_process:
                 post_id = post.get('id') or post.get('bvid')
-                if not post_id or comments_per_post <= 0:
+                remaining_comments = comment_count - len(comments)
+                if not post_id or remaining_comments <= 0:
                     continue
                 
                 try:
-                    post_comments = await crawler.get_comments(post_id, comments_per_post)
+                    request_count = min(remaining_comments, max(1, comment_request_cap))
+                    post_comments = await crawler.get_comments(post_id, request_count)
+                    post_comments = post_comments[:remaining_comments]
                     for c in post_comments:
                         c['post_id'] = post_id
                     comments.extend(post_comments)
@@ -384,7 +386,7 @@ async def crawl_platform(
 
             diagnostics.update({
                 "processed_posts": len(posts_to_process),
-                "comments_per_post": comments_per_post,
+                "comment_request_cap": comment_request_cap,
                 "fetched_posts": len(posts[:post_count]),
                 "fetched_comments": len(comments),
             })
